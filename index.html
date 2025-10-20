@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>WebGPU Evo CA — Manual / Evolve / Demo</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root {
+      --gap: 12px;
+      --muted: #666;
+      --bg: #fff;
+      --panel-bg: #fbfbfb;
+    }
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      margin: 12px;
+      background: #f7f7f7;
+      color: #111;
+    }
+    h2 { margin: 6px 0 12px 0; }
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--gap);
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    label { display:flex; gap:6px; align-items:center; font-size:14px; }
+    input[type="number"] { width:80px; padding:4px; }
+    select { padding:4px; }
+    button { padding:6px 10px; }
+    .layout {
+      display: grid;
+      grid-template-columns: 520px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .left-col {
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .canv-row {
+      background: var(--panel-bg);
+      border: 1px solid #e1e1e1;
+      padding: 10px;
+      border-radius: 6px;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      image-rendering: pixelated;
+      background: var(--bg);
+      display:block;
+    }
+    #patternCanvas { cursor: pointer; }
+    #log {
+      white-space: pre-wrap;
+      font-family: monospace;
+      background: #fff;
+      padding: 8px;
+      height: 200px;
+      overflow:auto;
+      border: 1px solid #e1e1e1;
+      border-radius: 6px;
+    }
+    #stats {
+      background: #fff;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #e1e1e1;
+      font-family: monospace;
+      font-size: 13px;
+      color: #222;
+    }
+    #seqStrip {
+      border: 1px solid #e1e1e1;
+      background: #fff;
+      display: block;
+      margin-top: 8px;
+    }
+    .muted { color: var(--muted); font-size:13px; }
+    .controls-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:6px; }
+  </style>
+</head>
+<body>
+  <h2>WebGPU Evolutionary CA — Manual / Evolve / Demo</h2>
+
+  <div id="controls">
+    <label>Mode:
+      <select id="mode">
+        <option value="manual">Manual</option>
+        <option value="evolve" selected>Evolve</option>
+        <option value="demo">Demo</option>
+      </select>
+    </label>
+
+    <label>Population: <input id="population" type="number" value="256" min="1" max="2048"></label>
+    <label>Steps: <input id="steps" type="number" value="10" min="1" max="128"></label>
+    <label>Generations: <input id="generations" type="number" value="200" min="1" max="10000"></label>
+    <label>Elite fraction: <input id="elite" type="number" value="0.2" min="0" max="0.5" step="0.01"></label>
+    <label>Mutation rate: <input id="mut" type="number" value="0.1" min="0" max="1" step="0.01"></label>
+    <label>Visualize every <input id="vizFreq" type="number" value="10" style="width:64px;"> gens</label>
+
+    <div class="controls-row" style="margin-left:8px;">
+      <button id="startBtn">Start</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <button id="clearPatternBtn">Clear Pattern</button>
+      <button id="savePatternBtn">Save Pattern (memory)</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="left-col">
+      <div class="canv-row">
+        <!-- combined target + best canvas -->
+        <canvas id="gridCanvas" width="520" height="280"></canvas>
+        <!-- fitness -->
+        <canvas id="fitnessCanvas" width="520" height="160" style="margin-top:10px;"></canvas>
+        <!-- best sequence symbolic strip -->
+        <canvas id="seqStrip" width="520" height="36"></canvas>
+      </div>
+
+      <div class="canv-row muted">
+        <div>Pattern editor (click cells to toggle). Manual Save stores pattern in memory.</div>
+        <canvas id="patternCanvas" width="300" height="300" style="margin-top:8px;"></canvas>
+      </div>
+    </div>
+
+    <div>
+      <div id="stats" class="canv-row">
+        <!-- stats will be filled by app.ts -->
+        <b>Stats</b><br>Best Fitness: 0.00%<br>Total Sequences Evaluated: 0<br>Unique Sequences Seen: 0<br>Best Sequence Length: 0
+      </div>
+
+      <div style="height:12px;"></div>
+
+      <div id="log" class="canv-row"></div>
+    </div>
+  </div>
+
+  <!-- load compiled JS module -->
+  <script type="module" src="./dist/app.js"></script>
+</body>
+</html>
