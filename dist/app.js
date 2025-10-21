@@ -16,7 +16,6 @@ const ACTION_DECODER = ACTIONS.map((name, index) => {
 });
 let currentMode = 'evolve';
 // Manual: demo (working) canvas state and target canvas state
-// let manualDemoState = new Uint8Array(GRID_SIZE * GRID_SIZE);
 let manualDemoState = new Uint8Array(GRID_SIZE * GRID_SIZE);
 let manualTargetState = new Uint8Array(GRID_SIZE * GRID_SIZE);
 let manualStep = 0;
@@ -42,6 +41,9 @@ let gpuQueue = null;
 let pipeline = null;
 let bindGroupLayout = null;
 let bindGroup = null;
+// Statistics tracking
+let avgFitnessHistory = [];
+let maxFitnessHistory = [];
 // shader string is taken from original user upload (keeps original fitness computation)
 const computeShaderWGSL = `
 struct Params {
@@ -61,7 +63,6 @@ fn get_idx(x: u32, y: u32) -> u32 {
   return y * params.gridSize + x;
 }
 
-// helper to wrap coords
 fn wrap_add(a: i32, b: i32, m: i32) -> i32 {
   let v = (a + b) % m;
   if (v < 0) {
@@ -71,8 +72,6 @@ fn wrap_add(a: i32, b: i32, m: i32) -> i32 {
 }
 
 fn apply_action_move(state: ptr<function, array<u32, 144>>, action_index: u32, grid_size: u32) {
-  // For move actions we store agent position in indices 140,141 as x,y (this is a convention used in input)
-  // action_index: 0=up,1=down,2=left,3=right
   var ax = (*state)[140u];
   var ay = (*state)[141u];
   if (action_index == 0u) {
@@ -89,16 +88,15 @@ fn apply_action_move(state: ptr<function, array<u32, 144>>, action_index: u32, g
 }
 
 fn apply_action_write(state: ptr<function, array<u32, 144>>, action_index: u32, grid_size: u32) {
-  // action_index 5..20 map to bit patterns for 2x2 write
-  let pat = action_index - 5u; // 0..15
+  let pat = action_index - 5u;
   var ax = (*state)[140u];
   var ay = (*state)[141u];
 
   for (var i: i32 = 0; i < 2; i = i + 1) {
     for (var j: i32 = 0; j < 2; j = j + 1) {
       let bit = (pat >> (u32(i*2 + j))) & 1u;
-      let wx = u32(wrap_add(i32(ax) + i32(j) - 1, 0, i32(grid_size)));
-      let wy = u32(wrap_add(i32(ay) + i32(i) - 1, 0, i32(grid_size)));
+      let wx = u32(wrap_add(i32(ax) + i32(j), 0, i32(grid_size)));
+      let wy = u32(wrap_add(i32(ay) + i32(i), 0, i32(grid_size)));
       (*state)[get_idx(wx, wy)] = bit;
     }
   }
@@ -116,13 +114,10 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
   let state_size = grid_size * grid_size;
 
   let offset = batch_idx * state_size;
-  // We'll keep agent position at reserved indices 140,141 (outside the 144 grid)
-  // For convenience we allocate a local array with a margin for agent coords
   var current_state: array<u32, 144>;
   for (var i: u32 = 0; i < state_size; i = i + 1) {
     current_state[i] = input[offset + i];
   }
-  // initialize agent pos (center)
   current_state[140u] = grid_size / 2u;
   current_state[141u] = grid_size / 2u;
 
@@ -135,9 +130,8 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
         apply_action_move(&current_state, action_index, params.gridSize);
     } else if (action_index >= 5u && action_index <= 20u) {
         apply_action_write(&current_state, action_index, params.gridSize);
-    } // else do_nothing or other codes - ignore
+    }
 
-    // apply CA (Conway-like) step to current_state -> produce next_state
     var next_state: array<u32, 144>;
     for (var y: u32 = 0; y < grid_size; y = y + 1) {
       for (var x: u32 = 0; x < grid_size; x = x + 1) {
@@ -172,14 +166,11 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
       }
     }
 
-    // copy next_state back to current_state
     for (var i2: u32 = 0; i2 < state_size; i2 = i2 + 1) {
       current_state[i2] = next_state[i2];
     }
-    // keep agent coords intact (already in 140,141)
   }
 
-  // compute fitness: compare current_state to targetPattern
   var score: u32 = 0u;
   for (var y2: u32 = 0; y2 < grid_size; y2 = y2 + 1) {
     for (var x2: u32 = 0; x2 < grid_size; x2 = x2 + 1) {
@@ -192,16 +183,12 @@ fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
   }
 
   fitness[batch_idx] = score;
-  // write output final state for convenience (optional)
   let out_offset = batch_idx * state_size;
   for (var i3: u32 = 0; i3 < state_size; i3 = i3 + 1) {
     output[out_offset + i3] = current_state[i3];
   }
 }
 `;
-// -----------------------
-// Helper JS/TS CA functions (CPU-side fallback and helpers)
-// -----------------------
 function conwayStep(grid) {
     const size = Math.sqrt(grid.length);
     const nextGrid = new Uint8Array(grid.length);
@@ -232,7 +219,6 @@ function conwayStep(grid) {
     }
     return nextGrid;
 }
-// function applyAction(state: Uint8Array, actionIndex: number, agentPos: {x: number, y: number}): Uint8Array {
 function applyAction(state, actionIndex, agentPos) {
     const size = Math.sqrt(state.length);
     const newState = new Uint8Array(state);
@@ -256,9 +242,8 @@ function applyAction(state, actionIndex, agentPos) {
         const patternBits = action.patBits;
         for (let i = 0; i < 2; i++) {
             for (let j = 0; j < 2; j++) {
-                // Note: agent is center; write at (agentY + i - 1, agentX + j - 1)
-                const yy = (agentPos.y + i - 1 + size) % size;
-                const xx = (agentPos.x + j - 1 + size) % size;
+                const yy = (agentPos.y + i + size) % size;
+                const xx = (agentPos.x + j + size) % size;
                 const idx = yy * size + xx;
                 newState[idx] = patternBits[i * 2 + j];
             }
@@ -266,25 +251,19 @@ function applyAction(state, actionIndex, agentPos) {
     }
     return newState;
 }
-/* Simulate a sequence starting from currentInitialState and return final grid */
 function evaluateSequenceToGrid(seq) {
     if (!seq || !currentInitialState)
         return null;
     const size = Math.sqrt(currentInitialState.length);
-    //   let state = new Uint8Array(currentInitialState);
     let state = new Uint8Array(currentInitialState);
     let agent = { x: size >> 1, y: size >> 1 };
     for (let a = 0; a < seq.length; a++) {
         const actionIndex = seq[a];
-        // apply action then conway step
         state = applyAction(state, actionIndex, agent);
         state = conwayStep(state);
     }
     return state;
 }
-/* -----------------------
-   Rendering helpers
-   ----------------------- */
 function renderGrid(canvas, grid, cellColor = '#2196F3', showAgent = false, agentX = 0, agentY = 0) {
     const size = Math.sqrt(grid ? grid.length : GRID_SIZE * GRID_SIZE);
     const ctx = canvas.getContext('2d');
@@ -292,30 +271,25 @@ function renderGrid(canvas, grid, cellColor = '#2196F3', showAgent = false, agen
         return;
     const cell = canvas.width / size;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = '#eee';
+    ctx.strokeStyle = '#ddd';
     ctx.fillStyle = cellColor;
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
             if (grid && grid[y * size + x] === 1) {
-                // draw with 1-pixel inset to avoid overlap artifacts
                 ctx.fillRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
             }
             ctx.strokeRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
         }
     }
-    // Draw agent position (2x2 square) centered similar to Python (agentX - 1.5, agentY - 1.5)
     if (showAgent) {
         ctx.strokeStyle = '#FF00FF';
         ctx.lineWidth = 3;
-        const px = (agentX - 1.5) * cell;
-        const py = (agentY - 1.5) * cell;
+        const px = agentX * cell;
+        const py = agentY * cell;
         ctx.strokeRect(px, py, 2 * cell, 2 * cell);
         ctx.lineWidth = 1;
     }
 }
-/* -----------------------
-   UI wiring
-   ----------------------- */
 function getUIElements() {
     const seqStripEl = document.getElementById('seqStrip');
     const dummyModeSelect = document.createElement('select');
@@ -364,10 +338,16 @@ function getUIElements() {
         evolveCurrentCanvas: document.getElementById('evolveCurrentCanvas'),
         targetVizCanvas: document.getElementById('targetVizCanvas'),
         evolveMode: document.getElementById('evolve-mode'),
+        manualResetBtn: document.getElementById('manualResetBtn'),
+        actionUsageCanvas: document.getElementById('actionUsageCanvas'),
+        fitnessDistCanvas: document.getElementById('fitnessDistCanvas'),
     };
 }
-function initEvolveMode(ui) { }
-;
+function initEvolveMode(ui) {
+    if (sharedTargetPattern) {
+        renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#F44336');
+    }
+}
 function handleModeChange(ui) {
     document.querySelectorAll('.mode-content').forEach(el => el.style.display = 'none');
     const selectedMode = document.getElementById(`${currentMode}-mode`);
@@ -384,9 +364,6 @@ function handleModeChange(ui) {
         initializeDemoMode();
     }
 }
-/* -----------------------
-   Manual Mode
-   ----------------------- */
 function calculateGridStats(grid) {
     const aliveCells = grid.reduce((a, b) => a + b, 0);
     const density = aliveCells / grid.length;
@@ -394,9 +371,7 @@ function calculateGridStats(grid) {
 }
 function updateManualDisplay() {
     const ui = getUIElements();
-    // Demo canvas: show agent and demo state
     renderGrid(ui.manualDemoCanvas, manualDemoState, '#2196F3', true, manualAgentX, manualAgentY);
-    // Target canvas: editable (no agent)
     renderGrid(ui.manualTargetCanvas, manualTargetState, '#F44336', false);
     const stats = calculateGridStats(manualDemoState);
     ui.manualStats.innerHTML = `
@@ -406,14 +381,12 @@ function updateManualDisplay() {
   `;
 }
 function initManualMode(ui) {
-    // ensure canvases sized
     ui.manualDemoCanvas.width = 240;
     ui.manualDemoCanvas.height = 240;
     ui.manualTargetCanvas.width = 240;
     ui.manualTargetCanvas.height = 240;
-    // clicking target canvas toggles target cells
     const cell = ui.manualTargetCanvas.width / GRID_SIZE;
-    ui.manualTargetCanvas.addEventListener('click', (e) => {
+    const targetClickHandler = (e) => {
         const rect = ui.manualTargetCanvas.getBoundingClientRect();
         const x = Math.floor((e.clientX - rect.left) / cell);
         const y = Math.floor((e.clientY - rect.top) / cell);
@@ -423,37 +396,35 @@ function initManualMode(ui) {
             sharedTargetPattern = new Uint8Array(manualTargetState);
             updateManualDisplay();
         }
-    });
-    // Save current demo state into the target canvas (also update sharedTargetPattern)
+    };
+    ui.manualTargetCanvas.removeEventListener('click', targetClickHandler);
+    ui.manualTargetCanvas.addEventListener('click', targetClickHandler);
     ui.savePatternBtn.addEventListener('click', () => {
         manualTargetState = new Uint8Array(manualDemoState);
         sharedTargetPattern = new Uint8Array(manualTargetState);
         log(ui.log, 'Pattern saved from demo canvas to target (shared).');
         updateManualDisplay();
     });
-    // Clear target
     ui.clearPatternBtn.addEventListener('click', () => {
         manualTargetState.fill(0);
         sharedTargetPattern = new Uint8Array(manualTargetState);
         updateManualDisplay();
     });
-    // keyboard controls operate on the demo canvas (agent)
+    ui.manualResetBtn.addEventListener('click', () => {
+        manualDemoState.fill(0);
+        manualStep = 0;
+        manualAgentX = GRID_SIZE >> 1;
+        manualAgentY = GRID_SIZE >> 1;
+        updateManualDisplay();
+        log(ui.log, 'Manual mode reset.');
+    });
     document.addEventListener('keydown', (e) => {
         if (currentMode !== 'manual')
             return;
-        const ui = getUIElements();
+        if (manualStep >= MANUAL_MAX_STEPS)
+            return;
         const key = e.key.toLowerCase();
-        if (key === 'c') {
-            // clear demo
-            manualDemoState.fill(0);
-            manualStep = 0;
-            manualAgentX = GRID_SIZE >> 1;
-            manualAgentY = GRID_SIZE >> 1;
-            updateManualDisplay();
-        }
-        else if (key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
-            if (manualStep >= MANUAL_MAX_STEPS)
-                return;
+        if (key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
             e.preventDefault();
             if (key === 'arrowup')
                 manualAgentY = (manualAgentY - 1 + GRID_SIZE) % GRID_SIZE;
@@ -463,30 +434,23 @@ function initManualMode(ui) {
                 manualAgentX = (manualAgentX - 1 + GRID_SIZE) % GRID_SIZE;
             else if (key === 'arrowright')
                 manualAgentX = (manualAgentX + 1 + GRID_SIZE) % GRID_SIZE;
-            // after moving, run one CA step
-            //   manualDemoState = new Uint8Array(conwayStep(manualDemoState).buffer);
             manualDemoState = conwayStep(manualDemoState);
             manualStep = Math.min(manualStep + 1, MANUAL_MAX_STEPS);
             updateManualDisplay();
         }
         else if (key === ' ') {
             e.preventDefault();
-            if (manualStep >= MANUAL_MAX_STEPS)
-                return;
             manualDemoState = conwayStep(manualDemoState);
             manualStep = Math.min(manualStep + 1, MANUAL_MAX_STEPS);
             updateManualDisplay();
         }
         else if (/^[0-9a-f]$/.test(key)) {
-            if (manualStep >= MANUAL_MAX_STEPS)
-                return;
             const patternNum = parseInt(key, 16);
             const bits = [(patternNum >> 3) & 1, (patternNum >> 2) & 1, (patternNum >> 1) & 1, patternNum & 1];
-            // write 2x2 centered at agent (same indexing as applyAction)
             for (let i = 0; i < 2; i++) {
                 for (let j = 0; j < 2; j++) {
-                    const yy = (manualAgentY + i - 1 + GRID_SIZE) % GRID_SIZE;
-                    const xx = (manualAgentX + j - 1 + GRID_SIZE) % GRID_SIZE;
+                    const yy = (manualAgentY + i + GRID_SIZE) % GRID_SIZE;
+                    const xx = (manualAgentX + j + GRID_SIZE) % GRID_SIZE;
                     const idx = yy * GRID_SIZE + xx;
                     manualDemoState[idx] = bits[i * 2 + j];
                 }
@@ -495,19 +459,14 @@ function initManualMode(ui) {
             updateManualDisplay();
         }
         else if (key === 's') {
-            // shortcut key: save demo as target
             manualTargetState = new Uint8Array(manualDemoState);
             sharedTargetPattern = new Uint8Array(manualTargetState);
             log(ui.log, 'Pattern saved from demo canvas to target (shared).');
             updateManualDisplay();
         }
     });
-    // init display
     updateManualDisplay();
 }
-/* -----------------------
-   Evolve Mode (GPU-integrated)
-   ----------------------- */
 function log(el, ...args) {
     if (!el)
         return;
@@ -526,7 +485,6 @@ async function requestDevice() {
     gpuQueue = gpuDevice.queue;
     return gpuDevice;
 }
-/* Setup compute pipeline using computeShaderWGSL */
 async function setupComputePipeline(batchSize, steps) {
     const device = await requestDevice();
     const shaderModule = device.createShaderModule({ code: computeShaderWGSL });
@@ -546,14 +504,12 @@ async function runEvolution(ui) {
         ui.stopBtn.disabled = true;
         return;
     }
-    // prepare initial state: same as Python — small 2x2 at the center
     const center = Math.floor(GRID_SIZE / 2);
     const initial = new Uint32Array(GRID_SIZE * GRID_SIZE);
     initial[center * GRID_SIZE + center] = 1;
     initial[center * GRID_SIZE + center + 1] = 1;
     initial[(center + 1) * GRID_SIZE + center] = 1;
     initial[(center + 1) * GRID_SIZE + center + 1] = 1;
-    // store as currentInitialState (Uint8 for CPU use)
     currentInitialState = new Uint8Array(initial.length);
     for (let i = 0; i < initial.length; i++)
         currentInitialState[i] = initial[i];
@@ -564,42 +520,33 @@ async function runEvolution(ui) {
     const mutationRate = Number(ui.mut.value) || 0.1;
     const eliteFrac = Number(ui.elite.value) || 0.2;
     const vizFreq = Number(ui.vizFreq.value) || 5;
-    // ensure pipeline
     await setupComputePipeline(batchSize, steps);
-    // Buffer sizes: input contains states (batch * stateSize) + sequences (batch * steps)
     const stateSize = GRID_SIZE * GRID_SIZE;
     const inputStatesSize = batchSize * stateSize;
     const inputSequenceSize = batchSize * steps;
     const inputTotalSize = (inputStatesSize + inputSequenceSize);
     const inputBufferSizeBytes = inputTotalSize * 4;
-    // Create buffers
-    // inputBuffer (u32) — initial states + sequences; we'll fill it each generation on CPU
     const inputBuffer = device.createBuffer({
         size: inputBufferSizeBytes,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
-    // outputBuffer (u32) — final states (batch * stateSize)
     const outputBuffer = device.createBuffer({
         size: inputStatesSize * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
-    // targetPattern buffer (u32)
     const targetBuffer = device.createBuffer({
         size: stateSize * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         mappedAtCreation: false,
     });
-    // write target pattern
     const paddedTarget = new Uint32Array(stateSize);
     for (let i = 0; i < stateSize; i++)
         paddedTarget[i] = (sharedTargetPattern ? sharedTargetPattern[i] : 0);
     device.queue.writeBuffer(targetBuffer, 0, paddedTarget.buffer, paddedTarget.byteOffset, paddedTarget.byteLength);
-    // fitnessBuffer (u32) - GPU writes fitness per individual
     const fitnessBuffer = device.createBuffer({
         size: batchSize * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
     });
-    // readback buffers
     const fitnessReadBuffer = device.createBuffer({
         size: batchSize * 4,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
@@ -608,15 +555,12 @@ async function runEvolution(ui) {
         size: inputStatesSize * 4,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
-    // params uniform buffer
-    const paramsBufferSize = 4 * 4; // gridSize, batchSize, steps, currentStep
+    const paramsBufferSize = 4 * 4;
     const paramsBuffer = device.createBuffer({
         size: paramsBufferSize,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    // pipeline and bind group
     const computePipeline = pipeline;
-    // create bind group for the pipeline — layout will depend on auto layout
     bindGroup = device.createBindGroup({
         layout: computePipeline.getBindGroupLayout(0),
         entries: [
@@ -627,7 +571,6 @@ async function runEvolution(ui) {
             { binding: 4, resource: { buffer: fitnessBuffer } },
         ],
     });
-    // Helper to create a population: sequences are integers 0..20 (actions) (we'll store as u32)
     function randomSequenceArray(pop, stepsCount) {
         const arr = new Uint32Array(pop * stepsCount);
         for (let i = 0; i < arr.length; i++) {
@@ -635,9 +578,7 @@ async function runEvolution(ui) {
         }
         return arr;
     }
-    // create initial population sequences
     let populationSequences = randomSequenceArray(batchSize, steps);
-    // and initial states: we'll fill every individual's initial state with the same seed initial pattern
     let inputStates = new Uint32Array(inputStatesSize);
     for (let b = 0; b < batchSize; b++) {
         const base = b * stateSize;
@@ -645,34 +586,27 @@ async function runEvolution(ui) {
             inputStates[base + i] = initial[i];
         }
     }
-    // create a typed array that represents the full inputBuffer contents (states + sequences)
     const inputFullArray = new Uint32Array(inputTotalSize);
     inputFullArray.set(inputStates, 0);
     inputFullArray.set(populationSequences, inputStatesSize);
-    // Write it for the first time
     device.queue.writeBuffer(inputBuffer, 0, inputFullArray.buffer, inputFullArray.byteOffset, inputFullArray.byteLength);
-    // Update uniform params
     const paramsArray = new Uint32Array([GRID_SIZE, batchSize, steps, 0]);
     device.queue.writeBuffer(paramsBuffer, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
-    // Prepare UI stats
     ui.statsDiv.innerHTML = `Gen: 0<br>Best Fitness: N/A<br>Avg Fitness: N/A<br>Elite: ${eliteFrac}<br>Mut rate: ${mutationRate}`;
     isRunning = true;
     currentGeneration = 0;
     bestFitness = Infinity;
     bestSequence = null;
-    // For logging diversity we keep track of a small sample of sequences as strings
+    avgFitnessHistory = [];
+    maxFitnessHistory = [];
     const seqSet = new Set();
-    // Main GA loop
     for (let gen = 0; gen < generations && isRunning; gen++) {
         currentGeneration = gen;
-        // write params.currentStep = 0 for full run (shader expects params.steps for inner loop)
         paramsArray[3] = 0;
         device.queue.writeBuffer(paramsBuffer, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
-        // refresh input buffer with current sequences and states
         inputFullArray.set(inputStates, 0);
         inputFullArray.set(populationSequences, inputStatesSize);
         device.queue.writeBuffer(inputBuffer, 0, inputFullArray.buffer, inputFullArray.byteOffset, inputFullArray.byteLength);
-        // dispatch compute
         const commandEncoder = device.createCommandEncoder();
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(computePipeline);
@@ -680,11 +614,9 @@ async function runEvolution(ui) {
         const workgroupCount = Math.ceil(batchSize / 64);
         pass.dispatchWorkgroups(workgroupCount);
         pass.end();
-        // copy fitness to read buffer & output to read buffer
         commandEncoder.copyBufferToBuffer(fitnessBuffer, 0, fitnessReadBuffer, 0, batchSize * 4);
         commandEncoder.copyBufferToBuffer(outputBuffer, 0, outputReadBuffer, 0, inputStatesSize * 4);
         device.queue.submit([commandEncoder.finish()]);
-        // map fitnessReadBuffer and outputReadBuffer
         await fitnessReadBuffer.mapAsync(GPUMapMode.READ);
         const fitnessArrayBuffer = fitnessReadBuffer.getMappedRange();
         const fitnessArray = new Uint32Array(fitnessArrayBuffer.slice(0));
@@ -693,7 +625,6 @@ async function runEvolution(ui) {
         const outputArrayBuffer = outputReadBuffer.getMappedRange();
         const outputArray = new Uint32Array(outputArrayBuffer.slice(0));
         outputReadBuffer.unmap();
-        // compute best & avg fitness on CPU
         let minFitness = Number.MAX_SAFE_INTEGER;
         let minIdx = -1;
         let sumFitness = 0;
@@ -706,23 +637,19 @@ async function runEvolution(ui) {
             }
         }
         const avgFitness = sumFitness / batchSize;
-        // update best if improved
         if (minFitness < bestFitness) {
             bestFitness = minFitness;
-            // read sequence for minIdx from populationSequences
             const seq = new Uint32Array(steps);
             for (let s = 0; s < steps; s++) {
                 seq[s] = populationSequences[minIdx * steps + s];
             }
             bestSequence = seq;
             log(ui.log, `Gen ${gen}: New best fitness ${bestFitness} (idx ${minIdx})`);
-            // For demo playback, compute demoPlaybackState from bestSequence and initial
             const bestGrid = evaluateSequenceToGrid(bestSequence);
             if (bestGrid && ui.evolveBestCanvas) {
                 renderGrid(ui.evolveBestCanvas, bestGrid, '#4CAF50', false);
             }
         }
-        // diversity: sample small subset of sequences, add stringified
         seqSet.clear();
         const sampleCount = Math.min(20, batchSize);
         for (let s = 0; s < sampleCount; s++) {
@@ -731,7 +658,8 @@ async function runEvolution(ui) {
             seqSet.add(seqStr);
         }
         const diversity = seqSet.size / sampleCount;
-        // update UI stats and render sample/current and target
+        avgFitnessHistory.push(avgFitness);
+        maxFitnessHistory.push(minFitness);
         ui.statsDiv.innerHTML = `
       Gen: <strong>${gen}</strong><br>
       Best Fitness: <strong>${bestFitness === Infinity ? 'N/A' : bestFitness}</strong><br>
@@ -741,37 +669,31 @@ async function runEvolution(ui) {
       Diversity (sample): <strong>${diversity.toFixed(2)}</strong><br>
       Mutation rate: <strong>${mutationRate}</strong>
     `;
-        // always render target
         if (ui.targetVizCanvas)
             renderGrid(ui.targetVizCanvas, sharedTargetPattern ? new Uint8Array(sharedTargetPattern) : new Uint8Array(stateSize), '#F44336');
-        // render a sample current output state (take outputArray of first individual)
-        // outputArray is a big array containing batch*stateSize outputs
         if (ui.evolveCurrentCanvas) {
             const sampleOut = new Uint8Array(stateSize);
             for (let i = 0; i < stateSize; i++)
                 sampleOut[i] = outputArray[i];
             renderGrid(ui.evolveCurrentCanvas, sampleOut, '#2196F3', false);
         }
-        // early-exit if we reached perfect fitness (0 mismatches)
+        if (gen % vizFreq === 0 || gen === generations - 1) {
+            renderFitnessChart(ui.fitnessDistCanvas, avgFitnessHistory, maxFitnessHistory);
+            renderActionUsage(ui.actionUsageCanvas, populationSequences, bestSequence, steps);
+        }
         if (bestFitness === 0) {
             log(ui.log, `Perfect match found in generation ${gen}.`);
             break;
         }
-        // GA reproduction step (simple elitism + mutation)
-        // collect pairs sorted by fitness
         const indices = new Array(batchSize).fill(0).map((_, i) => i);
         indices.sort((a, b) => fitnessArray[a] - fitnessArray[b]);
-        // keep elites
         const eliteCount = Math.max(1, Math.floor(batchSize * eliteFrac));
         const newPopulation = new Uint32Array(batchSize * steps);
-        // copy elites directly
         for (let e = 0; e < eliteCount; e++) {
             const srcIdx = indices[e];
             newPopulation.set(populationSequences.slice(srcIdx * steps, srcIdx * steps + steps), e * steps);
         }
-        // fill remaining with crossover + mutation
         for (let i = eliteCount; i < batchSize; i++) {
-            // tournament selection 2
             const a = indices[Math.floor(Math.random() * Math.max(1, batchSize * 0.5))];
             const b = indices[Math.floor(Math.random() * Math.max(1, batchSize * 0.5))];
             const parentA = populationSequences.slice(a * steps, a * steps + steps);
@@ -780,7 +702,6 @@ async function runEvolution(ui) {
             const crossPoint = Math.floor(Math.random() * steps);
             for (let s = 0; s < steps; s++) {
                 child[s] = (s < crossPoint) ? parentA[s] : parentB[s];
-                // mutation
                 if (Math.random() < mutationRate) {
                     child[s] = Math.floor(Math.random() * ACTIONS.length);
                 }
@@ -788,53 +709,137 @@ async function runEvolution(ui) {
             newPopulation.set(child, i * steps);
         }
         populationSequences = newPopulation;
-        // small pause for viz responsiveness if requested
         if (gen % vizFreq === 0) {
             await new Promise(r => setTimeout(r, 1));
         }
-    } // end generations
-    // cleanup GPU temporary buffers (let GC handle but destroy the obvious)
-    // Note: GPUBuffer.destroy() not yet supported everywhere; skip explicit destroy.
-    // Update UI final
+    }
     if (bestSequence) {
         const bestGrid = evaluateSequenceToGrid(bestSequence);
         if (bestGrid && ui.evolveBestCanvas)
             renderGrid(ui.evolveBestCanvas, bestGrid, '#4CAF50', false);
-        // store for demo
-        // (bestSequence kept in global)
     }
     isRunning = false;
     ui.startBtn.disabled = false;
     ui.stopBtn.disabled = true;
     log(ui.log, 'Evolution complete. Best sequence available for Demo mode.');
 }
-/* -----------------------
-   Demo Mode
-   ----------------------- */
+function renderFitnessChart(canvas, avgHistory, maxHistory) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx || avgHistory.length === 0)
+        return;
+    const width = canvas.width;
+    const height = canvas.height;
+    const padding = 40;
+    ctx.clearRect(0, 0, width, height);
+    const maxGen = avgHistory.length;
+    const maxFit = Math.max(...avgHistory, ...maxHistory);
+    const minFit = Math.min(...avgHistory, ...maxHistory);
+    const fitRange = maxFit - minFit || 1;
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+        const y = padding + (height - 2 * padding) * i / 5;
+        ctx.beginPath();
+        ctx.moveTo(padding, y);
+        ctx.lineTo(width - padding, y);
+        ctx.stroke();
+    }
+    ctx.strokeStyle = '#4CAF50';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < maxHistory.length; i++) {
+        const x = padding + (width - 2 * padding) * i / maxGen;
+        const y = height - padding - (height - 2 * padding) * (maxHistory[i] - minFit) / fitRange;
+        if (i === 0)
+            ctx.moveTo(x, y);
+        else
+            ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = '#2196F3';
+    ctx.beginPath();
+    for (let i = 0; i < avgHistory.length; i++) {
+        const x = padding + (width - 2 * padding) * i / maxGen;
+        const y = height - padding - (height - 2 * padding) * (avgHistory[i] - minFit) / fitRange;
+        if (i === 0)
+            ctx.moveTo(x, y);
+        else
+            ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.font = '12px Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('Generation', width / 2, height - 5);
+    ctx.save();
+    ctx.translate(10, height / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Fitness', 0, 0);
+    ctx.restore();
+}
+function renderActionUsage(canvas, population, bestSeq, steps) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx)
+        return;
+    const width = canvas.width;
+    const height = canvas.height;
+    const numActions = ACTIONS.length;
+    ctx.clearRect(0, 0, width, height);
+    const actionCounts = new Array(numActions).fill(0);
+    for (let i = 0; i < population.length; i++) {
+        actionCounts[population[i]]++;
+    }
+    const maxCount = Math.max(...actionCounts) || 1;
+    const barWidth = width / numActions;
+    ctx.fillStyle = '#2196F3';
+    for (let i = 0; i < numActions; i++) {
+        const barHeight = (actionCounts[i] / maxCount) * (height - 20);
+        ctx.fillRect(i * barWidth, height - barHeight, barWidth - 2, barHeight);
+    }
+    if (bestSeq) {
+        ctx.fillStyle = 'rgba(255, 152, 0, 0.7)';
+        const bestCounts = new Array(numActions).fill(0);
+        for (let i = 0; i < bestSeq.length; i++) {
+            bestCounts[bestSeq[i]]++;
+        }
+        for (let i = 0; i < numActions; i++) {
+            const barHeight = (bestCounts[i] / steps) * (height - 20);
+            ctx.fillRect(i * barWidth, height - barHeight, barWidth - 2, barHeight);
+        }
+    }
+}
 function updateDemoDisplay(ui) {
-    // target
     renderGrid(ui.demoTargetCanvas, sharedTargetPattern ? new Uint8Array(sharedTargetPattern) : new Uint8Array(GRID_SIZE * GRID_SIZE), '#F44336');
     if (demoPlaybackState && bestSequence) {
         renderGrid(ui.demoBestCanvas, demoPlaybackState, '#2196F3', true, demoAgentX, demoAgentY);
         ui.demoStep.textContent = demoPlaybackStep.toString();
-        // Render action sequence strip
         const seqCanvas = ui.demoActionsCanvas;
         const ctx = seqCanvas.getContext('2d');
-        if (!ctx)
-            return;
-        const steps = bestSequence.length;
-        const itemW = seqCanvas.width / steps;
-        ctx.clearRect(0, 0, seqCanvas.width, seqCanvas.height);
-        for (let i = 0; i < steps; i++) {
-            const a = bestSequence[i];
-            if (i < demoPlaybackStep)
-                ctx.fillStyle = '#ddd';
-            else if (i === demoPlaybackStep)
-                ctx.fillStyle = 'red';
-            else
-                ctx.fillStyle = '#f5f5f5';
-            ctx.fillRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
-            ctx.strokeRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
+        if (ctx) {
+            const steps = bestSequence.length;
+            const itemW = seqCanvas.width / steps;
+            ctx.clearRect(0, 0, seqCanvas.width, seqCanvas.height);
+            const actionLabels = ['↑', '↓', '←', '→', '∅'];
+            for (let i = 0; i < 16; i++) {
+                actionLabels.push(i.toString(16).toUpperCase());
+            }
+            for (let i = 0; i < steps; i++) {
+                const a = bestSequence[i];
+                if (i < demoPlaybackStep)
+                    ctx.fillStyle = '#ddd';
+                else if (i === demoPlaybackStep)
+                    ctx.fillStyle = 'red';
+                else
+                    ctx.fillStyle = '#f5f5f5';
+                ctx.fillRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
+                ctx.strokeStyle = '#999';
+                ctx.strokeRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
+                ctx.fillStyle = '#000';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(actionLabels[a] || '?', i * itemW + itemW / 2, seqCanvas.height / 2);
+            }
         }
     }
     else {
@@ -931,9 +936,6 @@ function initializeDemoMode() {
     });
     resetDemo(ui);
 }
-/* -----------------------
-   App Initialization
-   ----------------------- */
 function initApp() {
     const ui = getUIElements();
     const evolveBtn = document.getElementById('btn-evolve');
@@ -950,7 +952,6 @@ function initApp() {
     evolveBtn.addEventListener('click', handleModeButtonClick);
     manualBtn.addEventListener('click', handleModeButtonClick);
     demoBtn.addEventListener('click', handleModeButtonClick);
-    // default show evolve
     currentMode = 'evolve';
     handleModeChange(ui);
     evolveBtn.classList.add('active');
@@ -973,7 +974,6 @@ function initApp() {
         isRunning = false;
         log(ui.log, 'Evolution stopped by user.');
     });
-    // clicking on evolve target canvas to edit target pattern
     ui.targetVizCanvas.addEventListener('click', (e) => {
         const rect = ui.targetVizCanvas.getBoundingClientRect();
         const cell = ui.targetVizCanvas.width / GRID_SIZE;
@@ -985,7 +985,6 @@ function initApp() {
         sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
         renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#F44336');
     });
-    // clicking on demo target to allow edit
     ui.demoTargetCanvas.addEventListener('click', (e) => {
         const rect = ui.demoTargetCanvas.getBoundingClientRect();
         const cell = ui.demoTargetCanvas.width / GRID_SIZE;
@@ -997,8 +996,6 @@ function initApp() {
         sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
         renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#F44336');
     });
-    // initial logs
     log(ui.log, 'Ready. Draw or import a target pattern by toggling cells, or switch to Manual mode to craft one.');
 }
 initApp();
-/* EOF */

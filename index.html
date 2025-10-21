@@ -70,7 +70,6 @@
       box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
 
-    /* explicit fixed drawing pixels — we set width/height attributes in JS */
     .pattern-canvas {
       width: 240px;
       height: 240px;
@@ -163,12 +162,17 @@
         font-size: 12px;
         white-space: pre-wrap;
         font-family: monospace;
+        margin-top: 20px;
     }
 
     .demo-section {
       display: flex;
       flex-direction: column;
       gap: 16px;
+    }
+
+    .chart-container {
+      margin-top: 16px;
     }
 
     /* Responsive adjustments */
@@ -212,8 +216,15 @@
           </div>
         </div>
 
-        <div class="pattern-label" style="margin-top: 16px;">Evolution Log</div>
-        <div id="log"></div>
+        <div class="chart-container">
+          <div class="pattern-label">Fitness Progress</div>
+          <canvas id="fitnessDistCanvas" width="500" height="200" style="width:100%;max-width:500px;height:200px;"></canvas>
+        </div>
+
+        <div class="chart-container">
+          <div class="pattern-label">Action Usage (Population vs Best)</div>
+          <canvas id="actionUsageCanvas" width="500" height="150" style="width:100%;max-width:500px;height:150px;"></canvas>
+        </div>
       </div>
 
       <div class="evo-right">
@@ -270,9 +281,10 @@
         <div class="pattern-label">Target Pattern (Click to Edit)</div>
         <canvas id="manualTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
 
-        <div style="margin-top:12px; display:flex; gap:8px;">
+        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
           <button id="savePatternBtn">Save Demo → Target (S)</button>
-          <button id="clearPatternBtn">Clear Target (C)</button>
+          <button id="clearPatternBtn">Clear Target</button>
+          <button id="manualResetBtn">Reset Demo (C)</button>
         </div>
       </div>
     </div>
@@ -286,7 +298,9 @@
           • Space: Evolve CA one step (on demo canvas)<br>
           • 0-F: Write 2×2 pattern centered at the agent on the demo canvas<br>
           • S: Copy demo canvas into target pattern (the target canvas is editable by clicking)<br>
-          • C: Clear target canvas
+          • C: Reset demo canvas (via button)<br>
+          <br>
+          <strong>Note:</strong> The game freezes at {MANUAL_MAX_STEPS} steps. Use Reset to continue.
         </div>
       </div>
 
@@ -332,6 +346,10 @@
       </div>
     </div>
   </div>
+
+  <!-- Log section (visible across all modes) -->
+  <div class="pattern-label" style="margin-top: 24px;">Log</div>
+  <div id="log"></div>
 
   <!-- Hidden elements for compatibility -->
   <canvas id="seqStrip" style="display: none;"></canvas>
