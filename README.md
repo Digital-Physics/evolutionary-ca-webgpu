@@ -4,9 +4,7 @@ There is a compute shader that evaluates sequences.
 
 This parrallelization will be compared with regular web workers, which will most likely be the architecture in the final www.nets-vs-automata.net/rl.html verion.  
 
-Issues with demo mode.  
-Issues with visualizations.  
-Additional issues...  
+Lots of issues with Evolve, Manual, and Demo modes. Work in Progress. 
 
 #
 

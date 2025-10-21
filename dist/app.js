@@ -2,444 +2,332 @@
 // src/app.ts
 // WebGPU CA compute + GPU fitness + genetic algorithm
 // Modes: manual, evolve, demo
-//
-// Updated: fixed demo playback, manual reset, stats, seq strip, and TypeScript typing fixes.
 const GRID_SIZE = 12;
 const MAX_GENERATIONS_DEFAULT = 200;
-function log(el, ...args) {
-    el.textContent += args.join(' ') + '\n';
-    el.scrollTop = el.scrollHeight;
-}
-async function requestDevice() {
-    if (!navigator.gpu)
-        throw new Error('WebGPU not supported');
-    const adapter = await navigator.gpu.requestAdapter();
-    if (!adapter)
-        throw new Error('No GPU adapter found');
-    return await adapter.requestDevice();
-}
-// ---------- WGSL compute shader ----------
-const COMPUTE_SHADER = `
+const MANUAL_MAX_STEPS = 10;
+const ACTIONS = ['up', 'down', 'left', 'right', 'do_nothing', 'write_0000', 'write_0001', 'write_0010', 'write_0011', 'write_0100', 'write_0101', 'write_0110', 'write_0111', 'write_1000', 'write_1001', 'write_1010', 'write_1011', 'write_1100', 'write_1101', 'write_1110', 'write_1111'];
+const ACTION_DECODER = ACTIONS.map((name, index) => {
+    const parts = name.split('_');
+    if (parts.length === 2 && parts[0] === 'write') {
+        const bitString = parts[1];
+        return { type: 'write', patBits: bitString.split('').map(b => parseInt(b, 2)), index };
+    }
+    return { type: name, patBits: [0, 0, 0, 0], index };
+});
+let currentMode = 'evolve';
+// Manual: demo (working) canvas state and target canvas state
+// let manualDemoState = new Uint8Array(GRID_SIZE * GRID_SIZE);
+let manualDemoState = new Uint8Array(GRID_SIZE * GRID_SIZE);
+let manualTargetState = new Uint8Array(GRID_SIZE * GRID_SIZE);
+let manualStep = 0;
+let manualAgentX = GRID_SIZE >> 1;
+let manualAgentY = GRID_SIZE >> 1;
+// Shared target pattern (set from Manual mode or Evolve canvas) used by Evolve and Demo
+let sharedTargetPattern = null;
+// Evolve state
+let isRunning = false;
+let currentGeneration = 0;
+let bestFitness = Infinity;
+let bestSequence = null;
+let currentInitialState = new Uint8Array(GRID_SIZE * GRID_SIZE);
+// Demo state
+let demoPlaybackState = null;
+let demoPlaybackStep = 0;
+let demoInterval = null;
+let demoAgentX = GRID_SIZE >> 1;
+let demoAgentY = GRID_SIZE >> 1;
+// GPU device and pipeline context
+let gpuDevice = null;
+let gpuQueue = null;
+let pipeline = null;
+let bindGroupLayout = null;
+let bindGroup = null;
+// shader string is taken from original user upload (keeps original fitness computation)
+const computeShaderWGSL = `
 struct Params {
   gridSize: u32,
   batchSize: u32,
   steps: u32,
   currentStep: u32,
-  isLastStep: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> srcGrid: array<u32>;
-@group(0) @binding(2) var<storage, read_write> dstGrid: array<u32>;
-@group(0) @binding(3) var<storage, read> actions: array<u32>;
-@group(0) @binding(4) var<storage, read> targetGrid: array<u32>;
-@group(0) @binding(5) var<storage, read_write> fitnessCounts: array<atomic<u32>>;
+@group(0) @binding(1) var<storage, read> input: array<u32>;
+@group(0) @binding(2) var<storage, read_write> output: array<u32>;
+@group(0) @binding(3) var<storage, read> targetPattern: array<u32>;
+@group(0) @binding(4) var<storage, read_write> fitness: array<u32>;
 
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-  let x = gid.x;
-  let y = gid.y;
-  let g = gid.z;
-  let size = params.gridSize;
+fn get_idx(x: u32, y: u32) -> u32 {
+  return y * params.gridSize + x;
+}
 
-  if (x >= size || y >= size || g >= params.batchSize) { return; }
+// helper to wrap coords
+fn wrap_add(a: i32, b: i32, m: i32) -> i32 {
+  let v = (a + b) % m;
+  if (v < 0) {
+    return v + m;
+  }
+  return v;
+}
 
-  let gridIndex = g * size * size + y * size + x;
-  
-  // Count neighbors
-  var count: u32 = 0u;
-  for (var dy: i32 = -1; dy <= 1; dy++) {
-    for (var dx: i32 = -1; dx <= 1; dx++) {
-      if (dx == 0 && dy == 0) { continue; }
-      let nx = (i32(x) + dx + i32(size)) % i32(size);
-      let ny = (i32(y) + dy + i32(size)) % i32(size);
-      let nidx = g * size * size + u32(ny) * size + u32(nx);
-      count += srcGrid[nidx];
+fn apply_action_move(state: ptr<function, array<u32, 144>>, action_index: u32, grid_size: u32) {
+  // For move actions we store agent position in indices 140,141 as x,y (this is a convention used in input)
+  // action_index: 0=up,1=down,2=left,3=right
+  var ax = (*state)[140u];
+  var ay = (*state)[141u];
+  if (action_index == 0u) {
+    ay = (ay + grid_size - 1u) % grid_size;
+  } else if (action_index == 1u) {
+    ay = (ay + 1u) % grid_size;
+  } else if (action_index == 2u) {
+    ax = (ax + grid_size - 1u) % grid_size;
+  } else if (action_index == 3u) {
+    ax = (ax + 1u) % grid_size;
+  }
+  (*state)[140u] = ax;
+  (*state)[141u] = ay;
+}
+
+fn apply_action_write(state: ptr<function, array<u32, 144>>, action_index: u32, grid_size: u32) {
+  // action_index 5..20 map to bit patterns for 2x2 write
+  let pat = action_index - 5u; // 0..15
+  var ax = (*state)[140u];
+  var ay = (*state)[141u];
+
+  for (var i: i32 = 0; i < 2; i = i + 1) {
+    for (var j: i32 = 0; j < 2; j = j + 1) {
+      let bit = (pat >> (u32(i*2 + j))) & 1u;
+      let wx = u32(wrap_add(i32(ax) + i32(j) - 1, 0, i32(grid_size)));
+      let wy = u32(wrap_add(i32(ay) + i32(i) - 1, 0, i32(grid_size)));
+      (*state)[get_idx(wx, wy)] = bit;
     }
   }
+}
 
-  let alive = srcGrid[gridIndex];
-  var next: u32 = 0u;
-
-  // Conway's Game of Life
-  if (alive == 1u && (count == 2u || count == 3u)) {
-    next = 1u;
-  } else if (alive == 0u && count == 3u) {
-    next = 1u;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_id : vec3<u32>) {
+  let idx = global_id.x;
+  let batch_idx = idx;
+  if (batch_idx >= params.batchSize) {
+    return;
   }
 
-  // Apply action
-  let actionIdx = g * params.steps + params.currentStep;
-  let action = actions[actionIdx];
+  let grid_size = params.gridSize;
+  let state_size = grid_size * grid_size;
 
-  if (action > 0u) {
-    let atype = (action >> 24u) & 0xFFu;
-    let pat = (action >> 16u) & 0xFFu;
-    let pos = action & 0xFFFFu;
+  let offset = batch_idx * state_size;
+  // We'll keep agent position at reserved indices 140,141 (outside the 144 grid)
+  // For convenience we allocate a local array with a margin for agent coords
+  var current_state: array<u32, 144>;
+  for (var i: u32 = 0; i < state_size; i = i + 1) {
+    current_state[i] = input[offset + i];
+  }
+  // initialize agent pos (center)
+  current_state[140u] = grid_size / 2u;
+  current_state[141u] = grid_size / 2u;
 
-    if (atype == 2u) {
-      let wy = pos / size;
-      let wx = pos % size;
-      
-      if ((y >= wy && y < wy + 2u) && (x >= wx && x < wx + 2u)) {
-        let ly = y - wy;
-        let lx = x - wx;
-        let bit = (pat >> (ly * 2u + lx)) & 1u;
-        next = bit;
+  let sequence_offset = params.batchSize * state_size + batch_idx * params.steps;
+
+  for (var s: u32 = 0; s < params.steps; s = s + 1) {
+    let action_index = input[sequence_offset + s];
+
+    if (action_index >= 0u && action_index <= 3u) {
+        apply_action_move(&current_state, action_index, params.gridSize);
+    } else if (action_index >= 5u && action_index <= 20u) {
+        apply_action_write(&current_state, action_index, params.gridSize);
+    } // else do_nothing or other codes - ignore
+
+    // apply CA (Conway-like) step to current_state -> produce next_state
+    var next_state: array<u32, 144>;
+    for (var y: u32 = 0; y < grid_size; y = y + 1) {
+      for (var x: u32 = 0; x < grid_size; x = x + 1) {
+        var alive_neighbors: u32 = 0u;
+        for (var dy: i32 = -1; dy <= 1; dy = dy + 1) {
+          for (var dx: i32 = -1; dx <= 1; dx = dx + 1) {
+            if (!(dx == 0 && dy == 0)) {
+              let nx_i = wrap_add(i32(x) + dx, 0, i32(grid_size));
+              let ny_i = wrap_add(i32(y) + dy, 0, i32(grid_size));
+              let nx = u32(nx_i);
+              let ny = u32(ny_i);
+              alive_neighbors = alive_neighbors + current_state[get_idx(nx, ny)];
+            }
+          }
+        }
+        let cur = current_state[get_idx(x, y)];
+        var nxt: u32 = 0u;
+        if (cur == 1u) {
+          if (alive_neighbors == 2u || alive_neighbors == 3u) {
+            nxt = 1u;
+          } else {
+            nxt = 0u;
+          }
+        } else {
+          if (alive_neighbors == 3u) {
+            nxt = 1u;
+          } else {
+            nxt = 0u;
+          }
+        }
+        next_state[get_idx(x, y)] = nxt;
+      }
+    }
+
+    // copy next_state back to current_state
+    for (var i2: u32 = 0; i2 < state_size; i2 = i2 + 1) {
+      current_state[i2] = next_state[i2];
+    }
+    // keep agent coords intact (already in 140,141)
+  }
+
+  // compute fitness: compare current_state to targetPattern
+  var score: u32 = 0u;
+  for (var y2: u32 = 0; y2 < grid_size; y2 = y2 + 1) {
+    for (var x2: u32 = 0; x2 < grid_size; x2 = x2 + 1) {
+      let idx2 = get_idx(x2, y2);
+      let t = targetPattern[idx2];
+      if (current_state[idx2] != t) {
+        score = score + 1u;
       }
     }
   }
 
-  dstGrid[gridIndex] = next;
-
-  if (params.isLastStep == 1u) {
-    let tval = targetGrid[y * size + x];
-    if (next == tval) {
-      atomicAdd(&fitnessCounts[g], 1u);
-    }
+  fitness[batch_idx] = score;
+  // write output final state for convenience (optional)
+  let out_offset = batch_idx * state_size;
+  for (var i3: u32 = 0; i3 < state_size; i3 = i3 + 1) {
+    output[out_offset + i3] = current_state[i3];
   }
 }
 `;
-// ---------- GPUEvolver (same as before) ----------
-class GPUEvolver {
-    constructor(device, gridSize, batchSize) {
-        this.steps = 0;
-        this.actionsBuffer = null;
-        this.lastGridBuffer = null;
-        this.device = device;
-        this.gridSize = gridSize;
-        this.batchSize = batchSize;
-        const module = device.createShaderModule({ code: COMPUTE_SHADER });
-        this.pipeline = device.createComputePipeline({
-            layout: 'auto',
-            compute: { module, entryPoint: 'main' }
-        });
-        const totalCells = batchSize * gridSize * gridSize;
-        this.zeroedGrid = new Uint32Array(totalCells);
-        const bufSize = totalCells * 4;
-        this.gridBufferA = device.createBuffer({
-            size: bufSize,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-        });
-        this.gridBufferB = device.createBuffer({
-            size: bufSize,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-        });
-        device.queue.writeBuffer(this.gridBufferA, 0, this.zeroedGrid.buffer, this.zeroedGrid.byteOffset, this.zeroedGrid.byteLength);
-        device.queue.writeBuffer(this.gridBufferB, 0, this.zeroedGrid.buffer, this.zeroedGrid.byteOffset, this.zeroedGrid.byteLength);
-        this.targetBuffer = device.createBuffer({
-            size: gridSize * gridSize * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-        });
-        const emptyTarget = new Uint32Array(gridSize * gridSize);
-        device.queue.writeBuffer(this.targetBuffer, 0, emptyTarget.buffer, emptyTarget.byteOffset, emptyTarget.byteLength);
-        this.fitnessBuffer = device.createBuffer({
-            size: batchSize * 4,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST
-        });
-        this.fitnessReadBuffer = device.createBuffer({
-            size: batchSize * 4,
-            usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
-        });
-        this.paramsBuffer = device.createBuffer({
-            size: 20,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-        });
-    }
-    setTarget(target) {
-        this.device.queue.writeBuffer(this.targetBuffer, 0, target.buffer, target.byteOffset, target.byteLength);
-    }
-    async evaluate(actions, steps) {
-        if (actions.length !== this.batchSize * steps) {
-            throw new Error(`Actions length mismatch: got ${actions.length}, expected ${this.batchSize * steps}`);
-        }
-        this.steps = steps;
-        this.device.queue.writeBuffer(this.gridBufferA, 0, this.zeroedGrid.buffer, this.zeroedGrid.byteOffset, this.zeroedGrid.byteLength);
-        this.device.queue.writeBuffer(this.gridBufferB, 0, this.zeroedGrid.buffer, this.zeroedGrid.byteOffset, this.zeroedGrid.byteLength);
-        if (!this.actionsBuffer || this.actionsBuffer.size < actions.byteLength) {
-            this.actionsBuffer = this.device.createBuffer({
-                size: actions.byteLength,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-            });
-        }
-        this.device.queue.writeBuffer(this.actionsBuffer, 0, actions.buffer, actions.byteOffset, actions.byteLength);
-        const zeroFits = new Uint32Array(this.batchSize);
-        this.device.queue.writeBuffer(this.fitnessBuffer, 0, zeroFits.buffer, zeroFits.byteOffset, zeroFits.byteLength);
-        const wg = 8;
-        const dispatchX = Math.ceil(this.gridSize / wg);
-        const dispatchY = Math.ceil(this.gridSize / wg);
-        const dispatchZ = this.batchSize;
-        let srcBuffer = this.gridBufferA;
-        let dstBuffer = this.gridBufferB;
-        for (let step = 0; step < steps; step++) {
-            const isLast = step === steps - 1 ? 1 : 0;
-            const params = new Uint32Array([this.gridSize, this.batchSize, steps, step, isLast]);
-            this.device.queue.writeBuffer(this.paramsBuffer, 0, params.buffer, params.byteOffset, params.byteLength);
-            const bindGroup = this.device.createBindGroup({
-                layout: this.pipeline.getBindGroupLayout(0),
-                entries: [
-                    { binding: 0, resource: { buffer: this.paramsBuffer } },
-                    { binding: 1, resource: { buffer: srcBuffer } },
-                    { binding: 2, resource: { buffer: dstBuffer } },
-                    { binding: 3, resource: { buffer: this.actionsBuffer } },
-                    { binding: 4, resource: { buffer: this.targetBuffer } },
-                    { binding: 5, resource: { buffer: this.fitnessBuffer } }
-                ]
-            });
-            const enc = this.device.createCommandEncoder();
-            const pass = enc.beginComputePass();
-            pass.setPipeline(this.pipeline);
-            pass.setBindGroup(0, bindGroup);
-            pass.dispatchWorkgroups(dispatchX, dispatchY, dispatchZ);
-            pass.end();
-            this.device.queue.submit([enc.finish()]);
-            [srcBuffer, dstBuffer] = [dstBuffer, srcBuffer];
-        }
-        this.lastGridBuffer = srcBuffer;
-        await this.device.queue.onSubmittedWorkDone();
-        const encRead = this.device.createCommandEncoder();
-        encRead.copyBufferToBuffer(this.fitnessBuffer, 0, this.fitnessReadBuffer, 0, this.batchSize * 4);
-        this.device.queue.submit([encRead.finish()]);
-        await this.fitnessReadBuffer.mapAsync(GPUMapMode.READ);
-        const mapped = this.fitnessReadBuffer.getMappedRange();
-        const fitU32 = new Uint32Array(mapped).slice();
-        this.fitnessReadBuffer.unmap();
-        const cellCount = this.gridSize * this.gridSize;
-        const fitness = new Float32Array(this.batchSize);
-        for (let i = 0; i < this.batchSize; i++) {
-            fitness[i] = fitU32[i] / cellCount;
-        }
-        return fitness;
-    }
-    async getGrid(index) {
-        if (!this.lastGridBuffer)
-            throw new Error('No evaluation yet');
-        if (index < 0 || index >= this.batchSize)
-            throw new Error('Index out of bounds');
-        const cellsPerGrid = this.gridSize * this.gridSize;
-        const bytesPerGrid = cellsPerGrid * 4;
-        const offset = index * bytesPerGrid;
-        const readBuf = this.device.createBuffer({
-            size: bytesPerGrid,
-            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
-        });
-        const enc = this.device.createCommandEncoder();
-        enc.copyBufferToBuffer(this.lastGridBuffer, offset, readBuf, 0, bytesPerGrid);
-        this.device.queue.submit([enc.finish()]);
-        await readBuf.mapAsync(GPUMapMode.READ);
-        const arrU32 = new Uint32Array(readBuf.getMappedRange()).slice();
-        readBuf.unmap();
-        const arrU8 = new Uint8Array(cellsPerGrid);
-        for (let i = 0; i < cellsPerGrid; i++) {
-            arrU8[i] = arrU32[i] ? 1 : 0;
-        }
-        return arrU8;
-    }
-}
-// ---------- GA utilities ----------
-function createRandomSequence(steps, gridSize) {
-    const seq = new Uint32Array(steps);
-    for (let i = 0; i < steps; i++) {
-        const r = Math.random();
-        if (r < 0.3) {
-            const pos = Math.floor(Math.random() * (gridSize * gridSize));
-            const pattern = Math.floor(Math.random() * 16);
-            seq[i] = (2 << 24) | (pattern << 16) | pos;
-        }
-        else {
-            seq[i] = 0;
-        }
-    }
-    return seq;
-}
-function crossover(parent1, parent2) {
-    const child = new Uint32Array(parent1.length);
-    const cp = Math.floor(Math.random() * parent1.length);
-    child.set(parent1.slice(0, cp));
-    child.set(parent2.slice(cp), cp);
-    return child;
-}
-function mutate(seq, rate, gridSize) {
-    for (let i = 0; i < seq.length; i++) {
-        if (Math.random() < rate) {
-            const r = Math.random();
-            if (r < 0.3) {
-                const pos = Math.floor(Math.random() * (gridSize * gridSize));
-                const pattern = Math.floor(Math.random() * 16);
-                seq[i] = (2 << 24) | (pattern << 16) | pos;
-            }
-            else {
-                seq[i] = 0;
-            }
-        }
-    }
-}
-// ---------- Drawing helpers ----------
-function clearCanvas(ctx, w, h) {
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, w, h);
-}
-function drawGrid(ctx, grid, size, offsetX, offsetY, cellSize) {
+// -----------------------
+// Helper JS/TS CA functions (CPU-side fallback and helpers)
+// -----------------------
+function conwayStep(grid) {
+    const size = Math.sqrt(grid.length);
+    const nextGrid = new Uint8Array(grid.length);
     for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
-            const val = grid[y * size + x];
-            ctx.fillStyle = val ? '#111' : '#f5f5f5';
-            ctx.fillRect(offsetX + x * cellSize, offsetY + y * cellSize, cellSize - 1, cellSize - 1);
-        }
-    }
-}
-// fitness chart
-function drawFitnessChart(canvas, bestHistory, avgHistory) {
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width;
-    const h = canvas.height;
-    clearCanvas(ctx, w, h);
-    const margin = 32;
-    const plotW = w - margin - 8;
-    const plotH = h - margin - 16;
-    const ox = margin;
-    const oy = 8;
-    ctx.strokeStyle = '#ccc';
-    ctx.beginPath();
-    ctx.moveTo(ox, oy);
-    ctx.lineTo(ox, oy + plotH);
-    ctx.lineTo(ox + plotW, oy + plotH);
-    ctx.stroke();
-    const total = Math.max(1, Math.max(bestHistory.length, avgHistory.length));
-    const candidateMax = Math.max(1, ...(bestHistory.length ? bestHistory : [1]), ...(avgHistory.length ? avgHistory : [1]));
-    const maxFitness = candidateMax;
-    const yAt = (v) => oy + plotH - (v / maxFitness) * plotH;
-    const xAt = (i) => ox + (total <= 1 ? 0 : (i / (total - 1)) * plotW);
-    if (avgHistory.length > 0) {
-        ctx.beginPath();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#4CAF50';
-        for (let i = 0; i < avgHistory.length; i++) {
-            const x = xAt(i), y = yAt(avgHistory[i]);
-            if (i === 0)
-                ctx.moveTo(x, y);
-            else
-                ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-    }
-    if (bestHistory.length > 0) {
-        ctx.beginPath();
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#2196F3';
-        for (let i = 0; i < bestHistory.length; i++) {
-            const x = xAt(i), y = yAt(bestHistory[i]);
-            if (i === 0)
-                ctx.moveTo(x, y);
-            else
-                ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-    }
-    // legend
-    ctx.fillStyle = '#2196F3';
-    ctx.fillRect(ox + 6, oy + plotH + 4, 10, 6);
-    ctx.fillStyle = '#222';
-    ctx.fillText('Best', ox + 22, oy + plotH + 12);
-    ctx.fillStyle = '#4CAF50';
-    ctx.fillRect(ox + 72, oy + plotH + 4, 10, 6);
-    ctx.fillStyle = '#222';
-    ctx.fillText('Avg', ox + 88, oy + plotH + 12);
-}
-// ---------- CPU CA ----------
-function conwayStep(grid, size) {
-    const out = new Uint8Array(size * size);
-    for (let y = 0; y < size; y++) {
-        for (let x = 0; x < size; x++) {
-            let count = 0;
+            let neighbors = 0;
             for (let dy = -1; dy <= 1; dy++) {
                 for (let dx = -1; dx <= 1; dx++) {
                     if (dx === 0 && dy === 0)
                         continue;
                     const nx = (x + dx + size) % size;
                     const ny = (y + dy + size) % size;
-                    count += grid[ny * size + nx];
+                    neighbors += grid[ny * size + nx];
                 }
             }
-            const curr = grid[y * size + x];
+            const current = grid[y * size + x];
             let next = 0;
-            if (curr === 1 && (count === 2 || count === 3))
-                next = 1;
-            else if (curr === 0 && count === 3)
-                next = 1;
-            out[y * size + x] = next;
+            if (current === 1) {
+                if (neighbors === 2 || neighbors === 3)
+                    next = 1;
+            }
+            else {
+                if (neighbors === 3)
+                    next = 1;
+            }
+            nextGrid[y * size + x] = next;
         }
     }
-    return out;
+    return nextGrid;
 }
-class ManualSim {
-    constructor(size = GRID_SIZE, maxSteps = 10) {
-        this.size = size;
-        this.grid = new Uint8Array(size * size);
-        this.agentX = Math.floor(size / 2);
-        this.agentY = Math.floor(size / 2);
-        this.maxSteps = maxSteps;
-        this.stepCount = 0;
+// function applyAction(state: Uint8Array, actionIndex: number, agentPos: {x: number, y: number}): Uint8Array {
+function applyAction(state, actionIndex, agentPos) {
+    const size = Math.sqrt(state.length);
+    const newState = new Uint8Array(state);
+    const action = ACTION_DECODER[actionIndex];
+    if (action.type === 'do_nothing') {
+        return newState;
     }
-    reset() {
-        this.grid.fill(0);
-        this.agentX = Math.floor(this.size / 2);
-        this.agentY = Math.floor(this.size / 2);
-        this.stepCount = 0;
+    else if (action.type === 'up') {
+        agentPos.y = (agentPos.y - 1 + size) % size;
     }
-    step(action) {
-        let writePattern = null;
-        if (action >= 0 && action <= 3) {
-            if (action === 0)
-                this.agentY = (this.agentY - 1 + this.size) % this.size;
-            if (action === 1)
-                this.agentY = (this.agentY + 1) % this.size;
-            if (action === 2)
-                this.agentX = (this.agentX - 1 + this.size) % this.size;
-            if (action === 3)
-                this.agentX = (this.agentX + 1) % this.size;
-        }
-        else if (action === 4) {
-            // noop
-        }
-        else if (action >= 5) {
-            const idx = action - 5;
-            writePattern = [
-                (idx >> 3) & 1,
-                (idx >> 2) & 1,
-                (idx >> 1) & 1,
-                idx & 1
-            ];
-        }
-        // CA update then write
-        this.grid = Uint8Array.from(conwayStep(this.grid, this.size));
-        if (writePattern) {
-            for (let ry = 0; ry < 2; ry++) {
-                for (let rx = 0; rx < 2; rx++) {
-                    const y = (this.agentY + ry + this.size) % this.size;
-                    const x = (this.agentX + rx + this.size) % this.size;
-                    this.grid[y * this.size + x] = writePattern[ry * 2 + rx];
-                }
+    else if (action.type === 'down') {
+        agentPos.y = (agentPos.y + 1) % size;
+    }
+    else if (action.type === 'left') {
+        agentPos.x = (agentPos.x - 1 + size) % size;
+    }
+    else if (action.type === 'right') {
+        agentPos.x = (agentPos.x + 1) % size;
+    }
+    else if (action.type === 'write') {
+        const patternBits = action.patBits;
+        for (let i = 0; i < 2; i++) {
+            for (let j = 0; j < 2; j++) {
+                // Note: agent is center; write at (agentY + i - 1, agentX + j - 1)
+                const yy = (agentPos.y + i - 1 + size) % size;
+                const xx = (agentPos.x + j - 1 + size) % size;
+                const idx = yy * size + xx;
+                newState[idx] = patternBits[i * 2 + j];
             }
         }
-        this.stepCount++;
-        const done = this.stepCount >= this.maxSteps;
-        return { grid: this.grid.slice(), done };
     }
-    calculateFitness(target) {
-        if (!target)
-            return 0;
-        let match = 0;
-        for (let i = 0; i < this.grid.length; i++)
-            if (this.grid[i] === target[i])
-                match++;
-        return (match / this.grid.length) * 100;
+    return newState;
+}
+/* Simulate a sequence starting from currentInitialState and return final grid */
+function evaluateSequenceToGrid(seq) {
+    if (!seq || !currentInitialState)
+        return null;
+    const size = Math.sqrt(currentInitialState.length);
+    //   let state = new Uint8Array(currentInitialState);
+    let state = new Uint8Array(currentInitialState);
+    let agent = { x: size >> 1, y: size >> 1 };
+    for (let a = 0; a < seq.length; a++) {
+        const actionIndex = seq[a];
+        // apply action then conway step
+        state = applyAction(state, actionIndex, agent);
+        state = conwayStep(state);
+    }
+    return state;
+}
+/* -----------------------
+   Rendering helpers
+   ----------------------- */
+function renderGrid(canvas, grid, cellColor = '#2196F3', showAgent = false, agentX = 0, agentY = 0) {
+    const size = Math.sqrt(grid ? grid.length : GRID_SIZE * GRID_SIZE);
+    const ctx = canvas.getContext('2d');
+    if (!ctx)
+        return;
+    const cell = canvas.width / size;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#eee';
+    ctx.fillStyle = cellColor;
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (grid && grid[y * size + x] === 1) {
+                // draw with 1-pixel inset to avoid overlap artifacts
+                ctx.fillRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
+            }
+            ctx.strokeRect(Math.floor(x * cell), Math.floor(y * cell), Math.ceil(cell), Math.ceil(cell));
+        }
+    }
+    // Draw agent position (2x2 square) centered similar to Python (agentX - 1.5, agentY - 1.5)
+    if (showAgent) {
+        ctx.strokeStyle = '#FF00FF';
+        ctx.lineWidth = 3;
+        const px = (agentX - 1.5) * cell;
+        const py = (agentY - 1.5) * cell;
+        ctx.strokeRect(px, py, 2 * cell, 2 * cell);
+        ctx.lineWidth = 1;
     }
 }
-// ---------- App main ----------
-async function mainApp() {
-    const ui = {
-        mode: document.getElementById('mode'),
+/* -----------------------
+   UI wiring
+   ----------------------- */
+function getUIElements() {
+    const seqStripEl = document.getElementById('seqStrip');
+    const dummyModeSelect = document.createElement('select');
+    ['evolve', 'manual', 'demo'].forEach(mode => {
+        const option = document.createElement('option');
+        option.value = mode;
+        option.textContent = mode.charAt(0).toUpperCase() + mode.slice(1) + ' Mode';
+        dummyModeSelect.appendChild(option);
+    });
+    dummyModeSelect.value = 'evolve';
+    return {
+        mode: dummyModeSelect,
         population: document.getElementById('population'),
         steps: document.getElementById('steps'),
         generations: document.getElementById('generations'),
@@ -448,118 +336,633 @@ async function mainApp() {
         vizFreq: document.getElementById('vizFreq'),
         startBtn: document.getElementById('startBtn'),
         stopBtn: document.getElementById('stopBtn'),
-        canvas: document.getElementById('gridCanvas'),
-        fitnessCanvas: document.getElementById('fitnessCanvas'),
-        log: document.getElementById('log'),
+        canvas: document.getElementById('targetVizCanvas'),
+        fitnessCanvas: seqStripEl,
+        seqStrip: seqStripEl,
+        statsDiv: document.getElementById('statsDiv'),
+        manualMode: document.getElementById('manual-mode'),
+        manualDemoCanvas: document.getElementById('manualDemoCanvas'),
+        manualTargetCanvas: document.getElementById('manualTargetCanvas'),
+        manualStats: document.getElementById('manualStats'),
+        vizToggle: document.getElementById('vizToggle'),
         patternCanvas: document.getElementById('patternCanvas'),
         clearPatternBtn: document.getElementById('clearPatternBtn'),
         savePatternBtn: document.getElementById('savePatternBtn'),
-        statsDiv: document.getElementById('stats'),
-        seqStrip: document.getElementById('seqStrip')
+        demoMode: document.getElementById('demo-mode'),
+        demoTargetCanvas: document.getElementById('demoTargetCanvas'),
+        demoBestCanvas: document.getElementById('demoBestCanvas'),
+        demoActionsCanvas: document.getElementById('demoActionsCanvas'),
+        demoStep: document.getElementById('demoStep'),
+        demoMaxSteps: document.getElementById('demoMaxSteps'),
+        demoPlayBtn: document.getElementById('demoPlayBtn'),
+        demoPauseBtn: document.getElementById('demoPauseBtn'),
+        demoResetBtn: document.getElementById('demoResetBtn'),
+        demoStepBtn: document.getElementById('demoStepBtn'),
+        demoInfo: document.getElementById('demoInfo'),
+        log: document.getElementById('log'),
+        evolveBestCanvas: document.getElementById('evolveBestCanvas'),
+        evolveCurrentCanvas: document.getElementById('evolveCurrentCanvas'),
+        targetVizCanvas: document.getElementById('targetVizCanvas'),
+        evolveMode: document.getElementById('evolve-mode'),
     };
-    // sizing
-    const mainCellSize = Math.floor(200 / GRID_SIZE);
-    ui.canvas.width = 10 + GRID_SIZE * mainCellSize * 2 + 40 + 200;
-    ui.canvas.height = mainCellSize * GRID_SIZE + 90;
-    ui.fitnessCanvas.width = 520;
-    ui.fitnessCanvas.height = 160;
-    const patternCellSize = Math.floor(300 / GRID_SIZE);
-    ui.patternCanvas.width = patternCellSize * GRID_SIZE + 2;
-    ui.patternCanvas.height = patternCellSize * GRID_SIZE + 2;
-    // in-memory state
-    let globalTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
-    let bestSequence = null;
-    let bestFitness = 0;
-    let totalSequencesEvaluated = 0;
-    const uniqueSequences = new Set();
-    // redraw pattern canvas
-    const pctx = ui.patternCanvas.getContext('2d');
-    function redrawPatternCanvas() {
-        pctx.fillStyle = '#f5f5f5';
-        pctx.fillRect(0, 0, ui.patternCanvas.width, ui.patternCanvas.height);
-        for (let y = 0; y < GRID_SIZE; y++) {
-            for (let x = 0; x < GRID_SIZE; x++) {
-                if (globalTargetPattern[y * GRID_SIZE + x]) {
-                    pctx.fillStyle = '#111';
-                    pctx.fillRect(x * patternCellSize, y * patternCellSize, patternCellSize - 1, patternCellSize - 1);
-                }
-            }
-        }
-        pctx.strokeStyle = '#ddd';
-        for (let i = 0; i <= GRID_SIZE; i++) {
-            pctx.beginPath();
-            pctx.moveTo(i * patternCellSize, 0);
-            pctx.lineTo(i * patternCellSize, ui.patternCanvas.height);
-            pctx.stroke();
-            pctx.beginPath();
-            pctx.moveTo(0, i * patternCellSize);
-            pctx.lineTo(ui.patternCanvas.width, i * patternCellSize);
-            pctx.stroke();
-        }
+}
+function initEvolveMode(ui) { }
+;
+function handleModeChange(ui) {
+    document.querySelectorAll('.mode-content').forEach(el => el.style.display = 'none');
+    const selectedMode = document.getElementById(`${currentMode}-mode`);
+    if (selectedMode) {
+        selectedMode.style.display = 'block';
     }
-    redrawPatternCanvas();
-    ui.patternCanvas.addEventListener('click', (e) => {
-        const rect = ui.patternCanvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) / patternCellSize);
-        const y = Math.floor((e.clientY - rect.top) / patternCellSize);
+    if (currentMode === 'evolve') {
+        initEvolveMode(ui);
+    }
+    else if (currentMode === 'manual') {
+        initManualMode(ui);
+    }
+    else if (currentMode === 'demo') {
+        initializeDemoMode();
+    }
+}
+/* -----------------------
+   Manual Mode
+   ----------------------- */
+function calculateGridStats(grid) {
+    const aliveCells = grid.reduce((a, b) => a + b, 0);
+    const density = aliveCells / grid.length;
+    return { density };
+}
+function updateManualDisplay() {
+    const ui = getUIElements();
+    // Demo canvas: show agent and demo state
+    renderGrid(ui.manualDemoCanvas, manualDemoState, '#2196F3', true, manualAgentX, manualAgentY);
+    // Target canvas: editable (no agent)
+    renderGrid(ui.manualTargetCanvas, manualTargetState, '#F44336', false);
+    const stats = calculateGridStats(manualDemoState);
+    ui.manualStats.innerHTML = `
+    Step: <strong>${manualStep}/${MANUAL_MAX_STEPS}</strong><br>
+    Agent Position: <strong>(${manualAgentX}, ${manualAgentY})</strong><br>
+    Density: <strong>${stats.density.toFixed(2)}</strong>
+  `;
+}
+function initManualMode(ui) {
+    // ensure canvases sized
+    ui.manualDemoCanvas.width = 240;
+    ui.manualDemoCanvas.height = 240;
+    ui.manualTargetCanvas.width = 240;
+    ui.manualTargetCanvas.height = 240;
+    // clicking target canvas toggles target cells
+    const cell = ui.manualTargetCanvas.width / GRID_SIZE;
+    ui.manualTargetCanvas.addEventListener('click', (e) => {
+        const rect = ui.manualTargetCanvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) / cell);
+        const y = Math.floor((e.clientY - rect.top) / cell);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
             const idx = y * GRID_SIZE + x;
-            globalTargetPattern[idx] = 1 - globalTargetPattern[idx];
-            redrawPatternCanvas();
-            updateStatsPanel();
+            manualTargetState[idx] = 1 - manualTargetState[idx];
+            sharedTargetPattern = new Uint8Array(manualTargetState);
+            updateManualDisplay();
         }
     });
-    ui.clearPatternBtn.addEventListener('click', () => {
-        globalTargetPattern.fill(0);
-        redrawPatternCanvas();
-        updateStatsPanel();
-        log(ui.log, 'Pattern cleared (memory).');
-    });
+    // Save current demo state into the target canvas (also update sharedTargetPattern)
     ui.savePatternBtn.addEventListener('click', () => {
-        // Save target pattern in-memory only (no file)
-        log(ui.log, 'Pattern saved to memory (current target pattern).');
-        updateStatsPanel();
+        manualTargetState = new Uint8Array(manualDemoState);
+        sharedTargetPattern = new Uint8Array(manualTargetState);
+        log(ui.log, 'Pattern saved from demo canvas to target (shared).');
+        updateManualDisplay();
     });
-    // stats panel updater
-    function updateStatsPanel() {
-        ui.statsDiv.innerHTML = `
-      <b>Stats</b><br>
-      Best Fitness: ${(bestFitness * 100).toFixed(2)}%<br>
-      Total Sequences Evaluated: ${totalSequencesEvaluated}<br>
-      Unique Sequences Seen: ${uniqueSequences.size}<br>
-      Best Sequence Length: ${bestSequence ? bestSequence.length : 0}
-    `;
-        // redraw symbolic strip
-        drawSequenceStrip();
+    // Clear target
+    ui.clearPatternBtn.addEventListener('click', () => {
+        manualTargetState.fill(0);
+        sharedTargetPattern = new Uint8Array(manualTargetState);
+        updateManualDisplay();
+    });
+    // keyboard controls operate on the demo canvas (agent)
+    document.addEventListener('keydown', (e) => {
+        if (currentMode !== 'manual')
+            return;
+        const ui = getUIElements();
+        const key = e.key.toLowerCase();
+        if (key === 'c') {
+            // clear demo
+            manualDemoState.fill(0);
+            manualStep = 0;
+            manualAgentX = GRID_SIZE >> 1;
+            manualAgentY = GRID_SIZE >> 1;
+            updateManualDisplay();
+        }
+        else if (key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
+            if (manualStep >= MANUAL_MAX_STEPS)
+                return;
+            e.preventDefault();
+            if (key === 'arrowup')
+                manualAgentY = (manualAgentY - 1 + GRID_SIZE) % GRID_SIZE;
+            else if (key === 'arrowdown')
+                manualAgentY = (manualAgentY + 1) % GRID_SIZE;
+            else if (key === 'arrowleft')
+                manualAgentX = (manualAgentX - 1 + GRID_SIZE) % GRID_SIZE;
+            else if (key === 'arrowright')
+                manualAgentX = (manualAgentX + 1 + GRID_SIZE) % GRID_SIZE;
+            // after moving, run one CA step
+            //   manualDemoState = new Uint8Array(conwayStep(manualDemoState).buffer);
+            manualDemoState = conwayStep(manualDemoState);
+            manualStep = Math.min(manualStep + 1, MANUAL_MAX_STEPS);
+            updateManualDisplay();
+        }
+        else if (key === ' ') {
+            e.preventDefault();
+            if (manualStep >= MANUAL_MAX_STEPS)
+                return;
+            manualDemoState = conwayStep(manualDemoState);
+            manualStep = Math.min(manualStep + 1, MANUAL_MAX_STEPS);
+            updateManualDisplay();
+        }
+        else if (/^[0-9a-f]$/.test(key)) {
+            if (manualStep >= MANUAL_MAX_STEPS)
+                return;
+            const patternNum = parseInt(key, 16);
+            const bits = [(patternNum >> 3) & 1, (patternNum >> 2) & 1, (patternNum >> 1) & 1, patternNum & 1];
+            // write 2x2 centered at agent (same indexing as applyAction)
+            for (let i = 0; i < 2; i++) {
+                for (let j = 0; j < 2; j++) {
+                    const yy = (manualAgentY + i - 1 + GRID_SIZE) % GRID_SIZE;
+                    const xx = (manualAgentX + j - 1 + GRID_SIZE) % GRID_SIZE;
+                    const idx = yy * GRID_SIZE + xx;
+                    manualDemoState[idx] = bits[i * 2 + j];
+                }
+            }
+            manualStep = Math.min(manualStep + 1, MANUAL_MAX_STEPS);
+            updateManualDisplay();
+        }
+        else if (key === 's') {
+            // shortcut key: save demo as target
+            manualTargetState = new Uint8Array(manualDemoState);
+            sharedTargetPattern = new Uint8Array(manualTargetState);
+            log(ui.log, 'Pattern saved from demo canvas to target (shared).');
+            updateManualDisplay();
+        }
+    });
+    // init display
+    updateManualDisplay();
+}
+/* -----------------------
+   Evolve Mode (GPU-integrated)
+   ----------------------- */
+function log(el, ...args) {
+    if (!el)
+        return;
+    el.textContent += args.join(' ') + '\n';
+    el.scrollTop = el.scrollHeight;
+}
+async function requestDevice() {
+    if (!navigator.gpu)
+        throw new Error('WebGPU not supported');
+    if (gpuDevice)
+        return gpuDevice;
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter)
+        throw new Error('No GPU adapter found');
+    gpuDevice = await adapter.requestDevice();
+    gpuQueue = gpuDevice.queue;
+    return gpuDevice;
+}
+/* Setup compute pipeline using computeShaderWGSL */
+async function setupComputePipeline(batchSize, steps) {
+    const device = await requestDevice();
+    const shaderModule = device.createShaderModule({ code: computeShaderWGSL });
+    pipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: {
+            module: shaderModule,
+            entryPoint: 'main',
+        },
+    });
+    return pipeline;
+}
+async function runEvolution(ui) {
+    if (!sharedTargetPattern) {
+        log(ui.log, 'ERROR: No target pattern set. Switch to Manual mode and save a pattern first.');
+        ui.startBtn.disabled = false;
+        ui.stopBtn.disabled = true;
+        return;
     }
-    // main canvas context
-    const ctx = ui.canvas.getContext('2d');
-    // fitness histories
-    const bestHistory = [];
-    const avgHistory = [];
-    let stopFlag = false;
+    // prepare initial state: same as Python — small 2x2 at the center
+    const center = Math.floor(GRID_SIZE / 2);
+    const initial = new Uint32Array(GRID_SIZE * GRID_SIZE);
+    initial[center * GRID_SIZE + center] = 1;
+    initial[center * GRID_SIZE + center + 1] = 1;
+    initial[(center + 1) * GRID_SIZE + center] = 1;
+    initial[(center + 1) * GRID_SIZE + center + 1] = 1;
+    // store as currentInitialState (Uint8 for CPU use)
+    currentInitialState = new Uint8Array(initial.length);
+    for (let i = 0; i < initial.length; i++)
+        currentInitialState[i] = initial[i];
+    const device = await requestDevice();
+    const batchSize = Number(ui.population.value) || 50;
+    const steps = Number(ui.steps.value) || 12;
+    const generations = Number(ui.generations.value) || 100;
+    const mutationRate = Number(ui.mut.value) || 0.1;
+    const eliteFrac = Number(ui.elite.value) || 0.2;
+    const vizFreq = Number(ui.vizFreq.value) || 5;
+    // ensure pipeline
+    await setupComputePipeline(batchSize, steps);
+    // Buffer sizes: input contains states (batch * stateSize) + sequences (batch * steps)
+    const stateSize = GRID_SIZE * GRID_SIZE;
+    const inputStatesSize = batchSize * stateSize;
+    const inputSequenceSize = batchSize * steps;
+    const inputTotalSize = (inputStatesSize + inputSequenceSize);
+    const inputBufferSizeBytes = inputTotalSize * 4;
+    // Create buffers
+    // inputBuffer (u32) — initial states + sequences; we'll fill it each generation on CPU
+    const inputBuffer = device.createBuffer({
+        size: inputBufferSizeBytes,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    // outputBuffer (u32) — final states (batch * stateSize)
+    const outputBuffer = device.createBuffer({
+        size: inputStatesSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    // targetPattern buffer (u32)
+    const targetBuffer = device.createBuffer({
+        size: stateSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        mappedAtCreation: false,
+    });
+    // write target pattern
+    const paddedTarget = new Uint32Array(stateSize);
+    for (let i = 0; i < stateSize; i++)
+        paddedTarget[i] = (sharedTargetPattern ? sharedTargetPattern[i] : 0);
+    device.queue.writeBuffer(targetBuffer, 0, paddedTarget.buffer, paddedTarget.byteOffset, paddedTarget.byteLength);
+    // fitnessBuffer (u32) - GPU writes fitness per individual
+    const fitnessBuffer = device.createBuffer({
+        size: batchSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+    });
+    // readback buffers
+    const fitnessReadBuffer = device.createBuffer({
+        size: batchSize * 4,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    const outputReadBuffer = device.createBuffer({
+        size: inputStatesSize * 4,
+        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+    });
+    // params uniform buffer
+    const paramsBufferSize = 4 * 4; // gridSize, batchSize, steps, currentStep
+    const paramsBuffer = device.createBuffer({
+        size: paramsBufferSize,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    // pipeline and bind group
+    const computePipeline = pipeline;
+    // create bind group for the pipeline — layout will depend on auto layout
+    bindGroup = device.createBindGroup({
+        layout: computePipeline.getBindGroupLayout(0),
+        entries: [
+            { binding: 0, resource: { buffer: paramsBuffer } },
+            { binding: 1, resource: { buffer: inputBuffer } },
+            { binding: 2, resource: { buffer: outputBuffer } },
+            { binding: 3, resource: { buffer: targetBuffer } },
+            { binding: 4, resource: { buffer: fitnessBuffer } },
+        ],
+    });
+    // Helper to create a population: sequences are integers 0..20 (actions) (we'll store as u32)
+    function randomSequenceArray(pop, stepsCount) {
+        const arr = new Uint32Array(pop * stepsCount);
+        for (let i = 0; i < arr.length; i++) {
+            arr[i] = Math.floor(Math.random() * ACTIONS.length);
+        }
+        return arr;
+    }
+    // create initial population sequences
+    let populationSequences = randomSequenceArray(batchSize, steps);
+    // and initial states: we'll fill every individual's initial state with the same seed initial pattern
+    let inputStates = new Uint32Array(inputStatesSize);
+    for (let b = 0; b < batchSize; b++) {
+        const base = b * stateSize;
+        for (let i = 0; i < stateSize; i++) {
+            inputStates[base + i] = initial[i];
+        }
+    }
+    // create a typed array that represents the full inputBuffer contents (states + sequences)
+    const inputFullArray = new Uint32Array(inputTotalSize);
+    inputFullArray.set(inputStates, 0);
+    inputFullArray.set(populationSequences, inputStatesSize);
+    // Write it for the first time
+    device.queue.writeBuffer(inputBuffer, 0, inputFullArray.buffer, inputFullArray.byteOffset, inputFullArray.byteLength);
+    // Update uniform params
+    const paramsArray = new Uint32Array([GRID_SIZE, batchSize, steps, 0]);
+    device.queue.writeBuffer(paramsBuffer, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
+    // Prepare UI stats
+    ui.statsDiv.innerHTML = `Gen: 0<br>Best Fitness: N/A<br>Avg Fitness: N/A<br>Elite: ${eliteFrac}<br>Mut rate: ${mutationRate}`;
+    isRunning = true;
+    currentGeneration = 0;
+    bestFitness = Infinity;
+    bestSequence = null;
+    // For logging diversity we keep track of a small sample of sequences as strings
+    const seqSet = new Set();
+    // Main GA loop
+    for (let gen = 0; gen < generations && isRunning; gen++) {
+        currentGeneration = gen;
+        // write params.currentStep = 0 for full run (shader expects params.steps for inner loop)
+        paramsArray[3] = 0;
+        device.queue.writeBuffer(paramsBuffer, 0, paramsArray.buffer, paramsArray.byteOffset, paramsArray.byteLength);
+        // refresh input buffer with current sequences and states
+        inputFullArray.set(inputStates, 0);
+        inputFullArray.set(populationSequences, inputStatesSize);
+        device.queue.writeBuffer(inputBuffer, 0, inputFullArray.buffer, inputFullArray.byteOffset, inputFullArray.byteLength);
+        // dispatch compute
+        const commandEncoder = device.createCommandEncoder();
+        const pass = commandEncoder.beginComputePass();
+        pass.setPipeline(computePipeline);
+        pass.setBindGroup(0, bindGroup);
+        const workgroupCount = Math.ceil(batchSize / 64);
+        pass.dispatchWorkgroups(workgroupCount);
+        pass.end();
+        // copy fitness to read buffer & output to read buffer
+        commandEncoder.copyBufferToBuffer(fitnessBuffer, 0, fitnessReadBuffer, 0, batchSize * 4);
+        commandEncoder.copyBufferToBuffer(outputBuffer, 0, outputReadBuffer, 0, inputStatesSize * 4);
+        device.queue.submit([commandEncoder.finish()]);
+        // map fitnessReadBuffer and outputReadBuffer
+        await fitnessReadBuffer.mapAsync(GPUMapMode.READ);
+        const fitnessArrayBuffer = fitnessReadBuffer.getMappedRange();
+        const fitnessArray = new Uint32Array(fitnessArrayBuffer.slice(0));
+        fitnessReadBuffer.unmap();
+        await outputReadBuffer.mapAsync(GPUMapMode.READ);
+        const outputArrayBuffer = outputReadBuffer.getMappedRange();
+        const outputArray = new Uint32Array(outputArrayBuffer.slice(0));
+        outputReadBuffer.unmap();
+        // compute best & avg fitness on CPU
+        let minFitness = Number.MAX_SAFE_INTEGER;
+        let minIdx = -1;
+        let sumFitness = 0;
+        for (let i = 0; i < batchSize; i++) {
+            const f = fitnessArray[i];
+            sumFitness += f;
+            if (f < minFitness) {
+                minFitness = f;
+                minIdx = i;
+            }
+        }
+        const avgFitness = sumFitness / batchSize;
+        // update best if improved
+        if (minFitness < bestFitness) {
+            bestFitness = minFitness;
+            // read sequence for minIdx from populationSequences
+            const seq = new Uint32Array(steps);
+            for (let s = 0; s < steps; s++) {
+                seq[s] = populationSequences[minIdx * steps + s];
+            }
+            bestSequence = seq;
+            log(ui.log, `Gen ${gen}: New best fitness ${bestFitness} (idx ${minIdx})`);
+            // For demo playback, compute demoPlaybackState from bestSequence and initial
+            const bestGrid = evaluateSequenceToGrid(bestSequence);
+            if (bestGrid && ui.evolveBestCanvas) {
+                renderGrid(ui.evolveBestCanvas, bestGrid, '#4CAF50', false);
+            }
+        }
+        // diversity: sample small subset of sequences, add stringified
+        seqSet.clear();
+        const sampleCount = Math.min(20, batchSize);
+        for (let s = 0; s < sampleCount; s++) {
+            const idx = Math.floor(Math.random() * batchSize);
+            const seqStr = Array.from(populationSequences.slice(idx * steps, (idx + 1) * steps)).join(',');
+            seqSet.add(seqStr);
+        }
+        const diversity = seqSet.size / sampleCount;
+        // update UI stats and render sample/current and target
+        ui.statsDiv.innerHTML = `
+      Gen: <strong>${gen}</strong><br>
+      Best Fitness: <strong>${bestFitness === Infinity ? 'N/A' : bestFitness}</strong><br>
+      Avg Fitness: <strong>${avgFitness.toFixed(2)}</strong><br>
+      Population: <strong>${batchSize}</strong><br>
+      Steps: <strong>${steps}</strong><br>
+      Diversity (sample): <strong>${diversity.toFixed(2)}</strong><br>
+      Mutation rate: <strong>${mutationRate}</strong>
+    `;
+        // always render target
+        if (ui.targetVizCanvas)
+            renderGrid(ui.targetVizCanvas, sharedTargetPattern ? new Uint8Array(sharedTargetPattern) : new Uint8Array(stateSize), '#F44336');
+        // render a sample current output state (take outputArray of first individual)
+        // outputArray is a big array containing batch*stateSize outputs
+        if (ui.evolveCurrentCanvas) {
+            const sampleOut = new Uint8Array(stateSize);
+            for (let i = 0; i < stateSize; i++)
+                sampleOut[i] = outputArray[i];
+            renderGrid(ui.evolveCurrentCanvas, sampleOut, '#2196F3', false);
+        }
+        // early-exit if we reached perfect fitness (0 mismatches)
+        if (bestFitness === 0) {
+            log(ui.log, `Perfect match found in generation ${gen}.`);
+            break;
+        }
+        // GA reproduction step (simple elitism + mutation)
+        // collect pairs sorted by fitness
+        const indices = new Array(batchSize).fill(0).map((_, i) => i);
+        indices.sort((a, b) => fitnessArray[a] - fitnessArray[b]);
+        // keep elites
+        const eliteCount = Math.max(1, Math.floor(batchSize * eliteFrac));
+        const newPopulation = new Uint32Array(batchSize * steps);
+        // copy elites directly
+        for (let e = 0; e < eliteCount; e++) {
+            const srcIdx = indices[e];
+            newPopulation.set(populationSequences.slice(srcIdx * steps, srcIdx * steps + steps), e * steps);
+        }
+        // fill remaining with crossover + mutation
+        for (let i = eliteCount; i < batchSize; i++) {
+            // tournament selection 2
+            const a = indices[Math.floor(Math.random() * Math.max(1, batchSize * 0.5))];
+            const b = indices[Math.floor(Math.random() * Math.max(1, batchSize * 0.5))];
+            const parentA = populationSequences.slice(a * steps, a * steps + steps);
+            const parentB = populationSequences.slice(b * steps, b * steps + steps);
+            const child = new Uint32Array(steps);
+            const crossPoint = Math.floor(Math.random() * steps);
+            for (let s = 0; s < steps; s++) {
+                child[s] = (s < crossPoint) ? parentA[s] : parentB[s];
+                // mutation
+                if (Math.random() < mutationRate) {
+                    child[s] = Math.floor(Math.random() * ACTIONS.length);
+                }
+            }
+            newPopulation.set(child, i * steps);
+        }
+        populationSequences = newPopulation;
+        // small pause for viz responsiveness if requested
+        if (gen % vizFreq === 0) {
+            await new Promise(r => setTimeout(r, 1));
+        }
+    } // end generations
+    // cleanup GPU temporary buffers (let GC handle but destroy the obvious)
+    // Note: GPUBuffer.destroy() not yet supported everywhere; skip explicit destroy.
+    // Update UI final
+    if (bestSequence) {
+        const bestGrid = evaluateSequenceToGrid(bestSequence);
+        if (bestGrid && ui.evolveBestCanvas)
+            renderGrid(ui.evolveBestCanvas, bestGrid, '#4CAF50', false);
+        // store for demo
+        // (bestSequence kept in global)
+    }
+    isRunning = false;
+    ui.startBtn.disabled = false;
+    ui.stopBtn.disabled = true;
+    log(ui.log, 'Evolution complete. Best sequence available for Demo mode.');
+}
+/* -----------------------
+   Demo Mode
+   ----------------------- */
+function updateDemoDisplay(ui) {
+    // target
+    renderGrid(ui.demoTargetCanvas, sharedTargetPattern ? new Uint8Array(sharedTargetPattern) : new Uint8Array(GRID_SIZE * GRID_SIZE), '#F44336');
+    if (demoPlaybackState && bestSequence) {
+        renderGrid(ui.demoBestCanvas, demoPlaybackState, '#2196F3', true, demoAgentX, demoAgentY);
+        ui.demoStep.textContent = demoPlaybackStep.toString();
+        // Render action sequence strip
+        const seqCanvas = ui.demoActionsCanvas;
+        const ctx = seqCanvas.getContext('2d');
+        if (!ctx)
+            return;
+        const steps = bestSequence.length;
+        const itemW = seqCanvas.width / steps;
+        ctx.clearRect(0, 0, seqCanvas.width, seqCanvas.height);
+        for (let i = 0; i < steps; i++) {
+            const a = bestSequence[i];
+            if (i < demoPlaybackStep)
+                ctx.fillStyle = '#ddd';
+            else if (i === demoPlaybackStep)
+                ctx.fillStyle = 'red';
+            else
+                ctx.fillStyle = '#f5f5f5';
+            ctx.fillRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
+            ctx.strokeRect(i * itemW, 0, Math.ceil(itemW), seqCanvas.height);
+        }
+    }
+    else {
+        renderGrid(ui.demoBestCanvas, demoPlaybackState || new Uint8Array(GRID_SIZE * GRID_SIZE), '#2196F3', true, demoAgentX, demoAgentY);
+    }
+}
+function demoStepForward(ui) {
+    if (!bestSequence)
+        return;
+    if (!demoPlaybackState)
+        demoPlaybackState = new Uint8Array(currentInitialState || new Uint8Array(GRID_SIZE * GRID_SIZE));
+    if (demoPlaybackStep >= bestSequence.length)
+        return;
+    const actionIndex = bestSequence[demoPlaybackStep];
+    const agentPos = { x: demoAgentX, y: demoAgentY };
+    demoPlaybackState = applyAction(demoPlaybackState, actionIndex, agentPos);
+    demoAgentX = agentPos.x;
+    demoAgentY = agentPos.y;
+    demoPlaybackState = conwayStep(demoPlaybackState);
+    demoPlaybackStep++;
+    updateDemoDisplay(ui);
+    if (demoPlaybackStep >= bestSequence.length) {
+        ui.demoInfo.textContent = 'Sequence finished.';
+        if (demoInterval !== null) {
+            clearInterval(demoInterval);
+            demoInterval = null;
+        }
+        ui.demoPlayBtn.disabled = true;
+        ui.demoPauseBtn.disabled = true;
+    }
+}
+function resetDemo(ui) {
+    if (demoInterval !== null) {
+        clearInterval(demoInterval);
+        demoInterval = null;
+    }
+    demoPlaybackState = new Uint8Array(currentInitialState || new Uint8Array(GRID_SIZE * GRID_SIZE));
+    demoPlaybackStep = 0;
+    demoAgentX = GRID_SIZE >> 1;
+    demoAgentY = GRID_SIZE >> 1;
+    ui.demoStep.textContent = '0';
+    ui.demoPlayBtn.disabled = bestSequence === null;
+    ui.demoPauseBtn.disabled = true;
+    ui.demoStepBtn.disabled = bestSequence === null;
+    updateDemoDisplay(ui);
+}
+function initializeDemoMode() {
+    const ui = getUIElements();
+    ui.demoTargetCanvas.width = 240;
+    ui.demoTargetCanvas.height = 240;
+    ui.demoBestCanvas.width = 240;
+    ui.demoBestCanvas.height = 240;
+    ui.demoActionsCanvas.width = 400;
+    ui.demoActionsCanvas.height = 40;
+    if (!sharedTargetPattern || !currentInitialState || !bestSequence) {
+        ui.demoInfo.textContent = 'No data available. Run Evolve Mode first to generate a sequence.';
+        demoPlaybackState = new Uint8Array(GRID_SIZE * GRID_SIZE);
+        ui.demoPlayBtn.disabled = true;
+        ui.demoStepBtn.disabled = true;
+    }
+    else {
+        ui.demoMaxSteps.textContent = bestSequence.length.toString();
+        ui.demoInfo.textContent = `Loaded sequence with ${bestSequence.length} steps.`;
+        ui.demoPlayBtn.disabled = false;
+        ui.demoStepBtn.disabled = false;
+    }
+    ui.demoPlayBtn.addEventListener('click', () => {
+        if (!bestSequence)
+            return;
+        if (demoPlaybackStep >= bestSequence.length)
+            resetDemo(ui);
+        ui.demoPlayBtn.disabled = true;
+        ui.demoPauseBtn.disabled = false;
+        ui.demoStepBtn.disabled = true;
+        demoInterval = setInterval(() => demoStepForward(ui), 500);
+    });
+    ui.demoPauseBtn.addEventListener('click', () => {
+        if (demoInterval !== null) {
+            clearInterval(demoInterval);
+            demoInterval = null;
+        }
+        ui.demoPlayBtn.disabled = false;
+        ui.demoPauseBtn.disabled = true;
+        ui.demoStepBtn.disabled = false;
+    });
+    ui.demoResetBtn.addEventListener('click', () => {
+        resetDemo(ui);
+        ui.demoInfo.textContent = 'Demo reset.';
+    });
+    ui.demoStepBtn.addEventListener('click', () => {
+        if (bestSequence && demoPlaybackStep < bestSequence.length) {
+            demoStepForward(ui);
+        }
+    });
+    resetDemo(ui);
+}
+/* -----------------------
+   App Initialization
+   ----------------------- */
+function initApp() {
+    const ui = getUIElements();
+    const evolveBtn = document.getElementById('btn-evolve');
+    const manualBtn = document.getElementById('btn-manual');
+    const demoBtn = document.getElementById('btn-demo');
+    const handleModeButtonClick = (e) => {
+        const target = e.currentTarget;
+        const newMode = target.dataset.mode;
+        currentMode = newMode;
+        handleModeChange(ui);
+        [evolveBtn, manualBtn, demoBtn].forEach(btn => btn.classList.remove('active'));
+        target.classList.add('active');
+    };
+    evolveBtn.addEventListener('click', handleModeButtonClick);
+    manualBtn.addEventListener('click', handleModeButtonClick);
+    demoBtn.addEventListener('click', handleModeButtonClick);
+    // default show evolve
+    currentMode = 'evolve';
+    handleModeChange(ui);
+    evolveBtn.classList.add('active');
     ui.startBtn.addEventListener('click', async () => {
         ui.startBtn.disabled = true;
         ui.stopBtn.disabled = false;
-        stopFlag = false;
         ui.log.textContent = '';
         try {
-            const mode = ui.mode.value;
-            if (mode === 'evolve') {
-                await runEvolutionMode();
-            }
-            else if (mode === 'manual') {
-                runManualMode();
-            }
-            else if (mode === 'demo') {
-                await runDemoMode();
-            }
-            else {
-                log(ui.log, `Unknown mode: ${mode}`);
-            }
+            await runEvolution(ui);
         }
         catch (err) {
-            log(ui.log, 'Error:', err.message || String(err));
+            log(ui.log, 'Error:', err?.message ?? String(err));
         }
         finally {
             ui.startBtn.disabled = false;
@@ -567,382 +970,35 @@ async function mainApp() {
         }
     });
     ui.stopBtn.addEventListener('click', () => {
-        stopFlag = true;
-        ui.stopBtn.disabled = true;
+        isRunning = false;
+        log(ui.log, 'Evolution stopped by user.');
     });
-    // ---------- EVOLVE ----------
-    async function runEvolutionMode() {
-        if (globalTargetPattern.reduce((a, b) => a + b, 0) === 0) {
-            log(ui.log, 'Error: No target pattern set. Draw a pattern first.');
-            return;
-        }
-        log(ui.log, 'Initializing WebGPU device...');
-        const device = await requestDevice();
-        log(ui.log, 'WebGPU device ready');
-        const population = Math.max(8, parseInt(ui.population.value) || 128);
-        const steps = Math.max(1, parseInt(ui.steps.value) || 10);
-        const generations = Math.max(1, parseInt(ui.generations.value) || MAX_GENERATIONS_DEFAULT);
-        const eliteFrac = Math.max(0.01, Math.min(0.5, parseFloat(ui.elite.value) || 0.2));
-        const mutRate = Math.max(0.0, Math.min(1.0, parseFloat(ui.mut.value) || 0.1));
-        const vizEvery = Math.max(1, parseInt(ui.vizFreq.value) || 10);
-        const evolver = new GPUEvolver(device, GRID_SIZE, population);
-        const targetU32 = new Uint32Array(GRID_SIZE * GRID_SIZE);
-        for (let i = 0; i < targetU32.length; i++)
-            targetU32[i] = globalTargetPattern[i] ? 1 : 0;
-        evolver.setTarget(targetU32);
-        log(ui.log, `Target set: ${targetU32.reduce((a, b) => a + b, 0)} cells alive`);
-        log(ui.log, `Starting evolution: pop=${population}, steps=${steps}, gens=${generations}`);
-        // init population
-        const population_seqs = [];
-        for (let i = 0; i < population; i++)
-            population_seqs.push(createRandomSequence(steps, GRID_SIZE));
-        const eliteCount = Math.max(1, Math.floor(population * eliteFrac));
-        // reset stats
-        bestHistory.length = 0;
-        avgHistory.length = 0;
-        bestSequence = null;
-        bestFitness = 0;
-        totalSequencesEvaluated = 0;
-        uniqueSequences.clear();
-        updateStatsPanel();
-        drawFitnessChart(ui.fitnessCanvas, bestHistory, avgHistory);
-        for (let gen = 0; gen < generations; gen++) {
-            if (stopFlag) {
-                log(ui.log, 'Evolution stopped by user');
-                break;
-            }
-            // pack actions
-            const actionPack = new Uint32Array(population * steps);
-            for (let i = 0; i < population; i++)
-                actionPack.set(population_seqs[i], i * steps);
-            // evaluate
-            let fitness;
-            try {
-                fitness = await evolver.evaluate(actionPack, steps);
-            }
-            catch (e) {
-                log(ui.log, 'GPU evaluation error; aborting:', String(e));
-                break;
-            }
-            // update totals & unique
-            totalSequencesEvaluated += population;
-            for (let i = 0; i < population; i++)
-                uniqueSequences.add(Array.from(population_seqs[i]).join(','));
-            // stats
-            let bestIdx = 0;
-            let bestFit = fitness[0];
-            let sumFit = 0;
-            for (let i = 0; i < fitness.length; i++) {
-                sumFit += fitness[i];
-                if (fitness[i] > bestFit) {
-                    bestFit = fitness[i];
-                    bestIdx = i;
-                }
-            }
-            const avgFit = sumFit / fitness.length;
-            if (bestFit > bestFitness) {
-                bestFitness = bestFit;
-                bestSequence = new Uint32Array(population_seqs[bestIdx]);
-            }
-            bestHistory.push(bestFit);
-            avgHistory.push(avgFit);
-            // visualization
-            if ((gen % vizEvery) === 0 || gen === generations - 1) {
-                clearCanvas(ctx, ui.canvas.width, ui.canvas.height);
-                const leftX = 10;
-                const topY = 10;
-                const cell = mainCellSize;
-                const gap = 20;
-                // target
-                drawGrid(ctx, globalTargetPattern, GRID_SIZE, leftX, topY, cell);
-                ctx.fillStyle = '#000';
-                ctx.font = '12px sans-serif';
-                ctx.fillText('Target', leftX, topY + cell * GRID_SIZE + 18);
-                // best grid from GPU
-                let bestGrid = new Uint8Array(GRID_SIZE * GRID_SIZE);
-                try {
-                    bestGrid = await evolver.getGrid(bestIdx);
-                }
-                catch (err) {
-                    // empty if not available
-                }
-                const rightX = leftX + cell * GRID_SIZE + gap;
-                drawGrid(ctx, bestGrid, GRID_SIZE, rightX, topY, cell);
-                ctx.fillStyle = '#000';
-                ctx.fillText(`Best (Gen ${gen + 1}) ${(bestFit * 100).toFixed(2)}%`, rightX, topY + cell * GRID_SIZE + 18);
-                drawFitnessChart(ui.fitnessCanvas, bestHistory, avgHistory);
-            }
-            log(ui.log, `Gen ${gen + 1}/${generations} | Best: ${(bestFit * 100).toFixed(2)}% | Avg: ${(avgFit * 100).toFixed(2)}%`);
-            // breeding
-            const indices = Array.from({ length: population }, (_, i) => i);
-            indices.sort((a, b) => fitness[b] - fitness[a]);
-            const elites = indices.slice(0, eliteCount).map(i => new Uint32Array(population_seqs[i]));
-            const newPop = [];
-            for (const e of elites)
-                newPop.push(new Uint32Array(e));
-            while (newPop.length < population) {
-                const p1 = elites[Math.floor(Math.random() * elites.length)];
-                const p2 = elites[Math.floor(Math.random() * elites.length)];
-                const child = crossover(p1, p2);
-                mutate(child, mutRate, GRID_SIZE);
-                newPop.push(child);
-            }
-            population_seqs.length = 0;
-            population_seqs.push(...newPop.slice(0, population));
-            updateStatsPanel();
-        }
-        log(ui.log, `Evolution complete. Best overall fitness: ${(bestFitness * 100).toFixed(2)}%`);
-        updateStatsPanel();
-    }
-    // ---------- MANUAL ----------
-    function runManualMode() {
-        log(ui.log, 'Manual mode: Arrow keys/Space/0-F to write. S=save pattern to memory. C=clear. Q=quit.');
-        const steps = Math.max(1, parseInt(ui.steps.value) || 10);
-        const sim = new ManualSim(GRID_SIZE, steps);
-        let active = true;
-        function render() {
-            clearCanvas(ctx, ui.canvas.width, ui.canvas.height);
-            const leftX = 10;
-            const topY = 10;
-            const cell = mainCellSize;
-            const gap = 20;
-            drawGrid(ctx, globalTargetPattern, GRID_SIZE, leftX, topY, cell);
-            ctx.fillStyle = '#000';
-            ctx.font = '12px sans-serif';
-            ctx.fillText('Target', leftX, topY + cell * GRID_SIZE + 18);
-            const manualX = leftX + cell * GRID_SIZE + gap;
-            drawGrid(ctx, sim.grid, GRID_SIZE, manualX, topY, cell);
-            ctx.strokeStyle = 'cyan';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(manualX + sim.agentX * cell - 1, topY + sim.agentY * cell - 1, cell * 2 - 2, cell * 2 - 2);
-            ctx.fillStyle = '#000';
-            ctx.fillText(`Manual Mode | Step ${sim.stepCount}/${sim.maxSteps}`, manualX, topY + cell * GRID_SIZE + 18);
-            if (globalTargetPattern.reduce((a, b) => a + b, 0) > 0) {
-                const fit = sim.calculateFitness(globalTargetPattern);
-                ctx.fillText(`Fitness: ${fit.toFixed(2)}%`, manualX + 140, topY + cell * GRID_SIZE + 18);
-            }
-        }
-        render();
-        function handleKey(ev) {
-            if (!active)
-                return;
-            if (ev.key == null)
-                return;
-            const key = ev.key.toLowerCase();
-            if (key === 'q' || key === 'escape') {
-                log(ui.log, 'Manual mode exited.');
-                window.removeEventListener('keydown', handleKey);
-                active = false;
-                return;
-            }
-            if (key === 's') {
-                // Save current manual grid as the target pattern (in memory)
-                globalTargetPattern = new Uint8Array(sim.grid);
-                redrawPatternCanvas();
-                updateStatsPanel();
-                log(ui.log, 'Saved current manual grid as target pattern (memory).');
-                return;
-            }
-            if (key === 'c') {
-                sim.reset();
-                render();
-                return;
-            }
-            const hexKeys = '0123456789abcdef';
-            let action = null;
-            if (key === 'arrowup' || key === 'up')
-                action = 0;
-            else if (key === 'arrowdown' || key === 'down')
-                action = 1;
-            else if (key === 'arrowleft' || key === 'left')
-                action = 2;
-            else if (key === 'arrowright' || key === 'right')
-                action = 3;
-            else if (key === ' ' || key === 'spacebar' || key === 'space')
-                action = 4;
-            else if (hexKeys.indexOf(key) !== -1)
-                action = 5 + hexKeys.indexOf(key);
-            if (action === null)
-                return;
-            const res = sim.step(action);
-            render();
-            if (res.done) {
-                // stop and reset as requested
-                log(ui.log, 'Manual max steps reached — stopping and resetting manual mode.');
-                window.removeEventListener('keydown', handleKey);
-                active = false;
-                // reset sim
-                sim.reset();
-                render();
-            }
-        }
-        window.addEventListener('keydown', handleKey);
-    }
-    // ---------- DEMO ----------
-    async function runDemoMode() {
-        if (!bestSequence) {
-            log(ui.log, 'No best sequence in memory. Run evolve first to produce one.');
-            return;
-        }
-        log(ui.log, 'Starting demo playback of best sequence (in-memory).');
-        await playDemoSequence(bestSequence);
-    }
-    // decode action packed integer
-    function decodeAction(a) {
-        if (!a)
-            return { type: 'noop' };
-        const atype = (a >>> 24) & 0xff;
-        const pat = (a >>> 16) & 0xff;
-        const pos = a & 0xffff;
-        if (atype === 2) {
-            const wy = Math.floor(pos / GRID_SIZE);
-            const wx = pos % GRID_SIZE;
-            const bits = [
-                (pat >> 3) & 1,
-                (pat >> 2) & 1,
-                (pat >> 1) & 1,
-                pat & 1
-            ];
-            return { type: 'write', wx, wy, patBits: bits };
-        }
-        return { type: 'noop' };
-    }
-    // Play sequence with CA semantics identical to the shader: CA step -> apply write to next-state
-    async function playDemoSequence(sequence) {
-        const size = GRID_SIZE;
-        let grid = new Uint8Array(size * size); // initial state empty
-        const leftX = 10;
-        const topY = 10;
-        const cell = mainCellSize;
-        const gap = 20;
-        const manualX = leftX + cell * GRID_SIZE + gap;
-        const frameInterval = 380;
-        for (let f = 0; f < sequence.length + 20 && !stopFlag; f++) {
-            if (f > 0 && f <= sequence.length) {
-                const a = sequence[f - 1];
-                const dec = decodeAction(a);
-                // CA update first (produce next)
-                let nextGrid = Uint8Array.from(conwayStep(grid, size));
-                // apply write to nextGrid if write action
-                if (dec.type === 'write' && dec.wx !== undefined && dec.wy !== undefined && Array.isArray(dec.patBits)) {
-                    for (let ry = 0; ry < 2; ry++) {
-                        for (let rx = 0; rx < 2; rx++) {
-                            const y = (dec.wy + ry + size) % size;
-                            const x = (dec.wx + rx + size) % size;
-                            nextGrid[y * size + x] = dec.patBits[ry * 2 + rx];
-                        }
-                    }
-                }
-                // now set grid = nextGrid for next iteration & display
-                grid = nextGrid;
-            }
-            // render
-            clearCanvas(ctx, ui.canvas.width, ui.canvas.height);
-            // draw target
-            drawGrid(ctx, globalTargetPattern, GRID_SIZE, leftX, topY, cell);
-            ctx.fillStyle = '#000';
-            ctx.font = '12px sans-serif';
-            ctx.fillText('Target', leftX, topY + cell * GRID_SIZE + 18);
-            // draw demo grid
-            drawGrid(ctx, grid, GRID_SIZE, manualX, topY, cell);
-            ctx.fillStyle = '#000';
-            ctx.fillText(`Demo (${Math.min(f, sequence.length)}/${sequence.length})`, manualX, topY + cell * GRID_SIZE + 18);
-            // highlight agent (if last action was a write)
-            if (f > 0 && f <= sequence.length) {
-                const a = sequence[f - 1];
-                const dec = decodeAction(a);
-                if (dec.type === 'write' && dec.wx !== undefined && dec.wy !== undefined) {
-                    ctx.strokeStyle = 'red';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(manualX + dec.wx * cell - 1, topY + dec.wy * cell - 1, cell * 2 - 2, cell * 2 - 2);
-                }
-            }
-            // show fitness if target exists
-            if (globalTargetPattern.reduce((a, b) => a + b, 0) > 0) {
-                let match = 0;
-                for (let i = 0; i < grid.length; i++)
-                    if (grid[i] === globalTargetPattern[i])
-                        match++;
-                const fit = (match / grid.length) * 100;
-                ctx.fillStyle = '#000';
-                ctx.fillText(`Fitness: ${fit.toFixed(2)}%`, manualX + 140, topY + cell * GRID_SIZE + 18);
-            }
-            await new Promise(r => setTimeout(r, frameInterval));
-        }
-        log(ui.log, 'Demo finished.');
-    }
-    // ---------- Sequence strip (symbolic visualization) ----------
-    function drawSequenceStrip() {
-        const canvas = ui.seqStrip;
-        const ctx = canvas.getContext('2d');
-        clearCanvas(ctx, canvas.width, canvas.height);
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        if (!bestSequence) {
-            ctx.fillStyle = '#666';
-            ctx.font = '12px sans-serif';
-            ctx.fillText('No best sequence yet. Run evolve to generate one.', 8, 20);
-            return;
-        }
-        const maxShow = Math.min(bestSequence.length, Math.floor(canvas.width / 8));
-        const itemW = Math.floor(canvas.width / maxShow);
-        for (let i = 0; i < maxShow; i++) {
-            const a = bestSequence[i];
-            const dec = decodeAction(a);
-            const x = i * itemW + 4;
-            const y = 6;
-            // write actions: dark square with pattern shading; noop: light square
-            if (dec.type === 'write') {
-                ctx.fillStyle = '#222';
-                ctx.fillRect(x, y, itemW - 8, canvas.height - 12);
-                // indicate pattern bits as little 2x2 inside
-                const w = itemW - 12;
-                const cell = Math.max(1, Math.floor(w / 2));
-                for (let ry = 0; ry < 2; ry++) {
-                    for (let rx = 0; rx < 2; rx++) {
-                        const bit = dec.patBits[ry * 2 + rx];
-                        ctx.fillStyle = bit ? '#fff' : '#555';
-                        const sx = x + 2 + rx * cell;
-                        const sy = y + 2 + ry * cell;
-                        ctx.fillRect(sx, sy, cell - 1, cell - 1);
-                    }
-                }
-            }
-            else {
-                ctx.fillStyle = '#e6e6e6';
-                ctx.fillRect(x, y, itemW - 8, canvas.height - 12);
-            }
-            // border for current
-            ctx.strokeStyle = '#ccc';
-            ctx.strokeRect(x, y, itemW - 8, canvas.height - 12);
-        }
-    }
-    // keyboard helper: copy best sequence json to clipboard with 'D' (optional)
-    window.addEventListener('keydown', (e) => {
-        if (e.key.toLowerCase() === 'd') {
-            if (!bestSequence) {
-                log(ui.log, 'No best sequence to export.');
-                return;
-            }
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(JSON.stringify(Array.from(bestSequence))).then(() => {
-                    log(ui.log, 'Best sequence copied to clipboard (JSON).');
-                }, () => {
-                    log(ui.log, 'Could not copy sequence to clipboard.');
-                });
-            }
-            else {
-                log(ui.log, 'Clipboard not available.');
-            }
-        }
+    // clicking on evolve target canvas to edit target pattern
+    ui.targetVizCanvas.addEventListener('click', (e) => {
+        const rect = ui.targetVizCanvas.getBoundingClientRect();
+        const cell = ui.targetVizCanvas.width / GRID_SIZE;
+        const x = Math.floor((e.clientX - rect.left) / cell);
+        const y = Math.floor((e.clientY - rect.top) / cell);
+        if (!sharedTargetPattern)
+            sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
+        const idx = y * GRID_SIZE + x;
+        sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
+        renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#F44336');
     });
-    // initial UI state
-    updateStatsPanel();
-    drawFitnessChart(ui.fitnessCanvas, bestHistory, avgHistory);
-    drawSequenceStrip();
-    log(ui.log, 'Ready. Draw a target pattern, choose a mode, and click Start.');
+    // clicking on demo target to allow edit
+    ui.demoTargetCanvas.addEventListener('click', (e) => {
+        const rect = ui.demoTargetCanvas.getBoundingClientRect();
+        const cell = ui.demoTargetCanvas.width / GRID_SIZE;
+        const x = Math.floor((e.clientX - rect.left) / cell);
+        const y = Math.floor((e.clientY - rect.top) / cell);
+        if (!sharedTargetPattern)
+            sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
+        const idx = y * GRID_SIZE + x;
+        sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
+        renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#F44336');
+    });
+    // initial logs
+    log(ui.log, 'Ready. Draw or import a target pattern by toggling cells, or switch to Manual mode to craft one.');
 }
-mainApp().catch((err) => {
-    console.error(err);
-    alert('App error: ' + err.message);
-});
+initApp();
+/* EOF */
