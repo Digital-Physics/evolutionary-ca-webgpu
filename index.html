@@ -4,355 +4,368 @@
   <meta charset="utf-8" />
   <title>Evolutionary Cellular Automata Solutions</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script type="module" src="./dist/app.js"></script>
   <style>
     * { box-sizing: border-box; }
-    body {
-      font-family: 'Inter', system-ui, Arial;
+    html, body {
+      height: 100%;
       margin: 0;
-      padding: 20px;
-      background: #f8f8f8;
-      color: #333;
+      font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f7fafc;
+      color: #2d3748;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+      gap: 1.5rem;
     }
     
-    h1 { margin: 0 0 16px 0; font-size: 28px; color: #1e40af; }
+    h1 { margin: 0; font-size: 1.75rem; color: #2c5282; }
+    
+    .main-content {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0; /* Important for flex-grow in a flex column */
+    }
     
     /* Mode Selector */
     .mode-selector {
       display: flex;
-      gap: 12px;
-      margin-bottom: 24px;
+      gap: 0.75rem;
       flex-wrap: wrap;
     }
     
     .mode-btn {
-      padding: 10px 20px;
-      border: 2px solid #ccc;
+      padding: 0.6rem 1.2rem;
+      border: 2px solid #cbd5e0;
       background: #fff;
       cursor: pointer;
-      border-radius: 8px;
+      border-radius: 0.5rem;
       font-weight: 600;
-      transition: all 0.2s;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      transition: all 0.2s ease-in-out;
+      box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
     }
     
     .mode-btn:hover {
-      border-color: #2196F3;
-      color: #2196F3;
+      border-color: #4299e1;
+      color: #4299e1;
     }
     
     .mode-btn.active {
-      background: #2196F3;
+      background: #4299e1;
       color: #fff;
-      border-color: #2196F3;
-      box-shadow: 0 4px 8px rgba(33, 150, 243, 0.3);
+      border-color: #4299e1;
+      box-shadow: 0 4px 6px -1px rgba(66, 153, 225, 0.3), 0 2px 4px -1px rgba(66, 153, 225, 0.15);
     }
     
-    .mode-content { display: none; }
-
-    /* Layout Containers */
-    .evo-container, .manual-container {
-      display: grid;
-      grid-template-columns: minmax(280px, 1fr) 320px;
-      gap: 24px;
-      align-items: flex-start;
+    .mode-content { 
+      display: none;
+      flex-grow: 1;
+      overflow: hidden; /* Prevent content from overflowing its container */
     }
-    .demo-container {
-      display: flex;
-      gap: 24px;
-      flex-wrap: wrap;
+
+    .container {
+        display: flex;
+        gap: 1.5rem;
+        height: 100%;
+    }
+
+    .left-panel {
+        flex: 3;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        min-width: 0;
+    }
+
+    .right-panel {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        min-width: 280px;
+    }
+
+    .card {
+        background: #fff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
     }
 
     /* Canvas Styles */
     canvas {
-      border: 1px solid #ddd;
+      border: 1px solid #e2e8f0;
       background-color: #fff;
-      border-radius: 6px;
-      box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+      border-radius: 0.375rem;
     }
 
     .pattern-canvas {
-      width: 240px;
-      height: 240px;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 1 / 1;
       cursor: pointer;
-    }
-
-    #demoActionsCanvas {
-      width: 400px;
-      height: 40px;
+      max-width: 240px;
     }
     
-    /* Labels */
     .pattern-label {
       font-weight: 700;
-      margin-bottom: 8px;
-      color: #1f2937;
-      border-bottom: 2px solid #e5e7eb;
-      padding-bottom: 4px;
+      margin-bottom: 0.5rem;
+      color: #4a5568;
+      font-size: 0.875rem;
     }
 
     /* Stats Box */
     .stats-box {
-      background: #f0f4f8;
-      padding: 15px;
-      border-radius: 8px;
-      border: 1px solid #d1d5db;
-      width: 100%;
       line-height: 1.6;
-      font-size: 14px;
-      box-shadow: inset 0 1px 3px rgba(0,0,0,0.05);
+      font-size: 0.875rem;
+      word-break: break-all;
     }
-    .stats-box strong { color: #059669; }
+    .stats-box strong { color: #2b6cb0; }
     
     /* Controls Styling */
     .controls {
       display: flex;
-      gap: 10px;
+      gap: 0.5rem;
       flex-wrap: wrap;
-      margin-bottom: 16px;
     }
     
     button {
-      padding: 10px 15px;
-      border-radius: 6px;
+      padding: 0.6rem 1rem;
+      border-radius: 0.375rem;
       font-weight: 600;
       cursor: pointer;
       transition: background-color 0.2s;
-      border: 1px solid #3b82f6;
-      background-color: #3b82f6;
+      border: 1px solid #3182ce;
+      background-color: #4299e1;
       color: white;
     }
     button:hover:not(:disabled) {
-      background-color: #2563eb;
+      background-color: #3182ce;
     }
     button:disabled {
-      background-color: #9ca3af;
-      border-color: #9ca3af;
+      background-color: #a0aec0;
+      border-color: #a0aec0;
       cursor: not-allowed;
     }
     
     input[type="number"], select, input[type="checkbox"] {
-        padding: 6px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
+        padding: 0.4rem;
+        border: 1px solid #cbd5e0;
+        border-radius: 0.25rem;
     }
     
     .param-grid {
       display: grid; 
-      grid-template-columns: 1fr 1fr; 
-      gap: 8px;
-      margin-bottom: 12px;
+      grid-template-columns: auto 1fr; 
+      gap: 0.75rem;
+      align-items: center;
     }
-
-    .param-grid label {
-      font-size: 13px;
-      font-weight: 500;
-    }
-
-    .param-grid input {
-      width: 100%;
-    }
+    .param-grid label { font-weight: 500; }
+    .param-grid input { width: 100%; }
     
     #log {
-        max-height: 200px;
+        height: 150px;
         overflow-y: auto;
-        background: #fff;
-        padding: 10px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 12px;
+        background: #1a202c;
+        color: #c6f6d5;
+        padding: 0.75rem;
+        border: 1px solid #2d3748;
+        border-radius: 0.375rem;
+        font-size: 0.75rem;
         white-space: pre-wrap;
-        font-family: monospace;
-        margin-top: 20px;
-    }
-
-    .demo-section {
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
     }
 
     .chart-container {
-      margin-top: 16px;
+        flex-grow: 1;
+        min-height: 150px;
+    }
+    .chart-canvas {
+        width: 100%;
+        height: 100%;
+    }
+
+    .canvas-grid {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+    }
+    .canvas-grid > div {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.5rem;
     }
 
     /* Responsive adjustments */
     @media (max-width: 768px) {
-      .evo-container, .manual-container {
-        grid-template-columns: 1fr;
-      }
-      .demo-container {
-        flex-direction: column;
-      }
+      body { padding: 1rem; gap: 1rem; }
+      .container { flex-direction: column; }
+      .right-panel { min-width: unset; }
+      .canvas-grid { flex-direction: column; }
+      .pattern-canvas { max-width: 100%; }
     }
   </style>
-  <script type="module" src="./dist/app.js"></script>
 </head>
 <body>
-  <h1>Evolving Cellular Automaton Solutions (w/ WebGPU compute shader)</h1>
+  <h1>Evolutionary Cellular Automata Solutions</h1>
 
-  <!-- Mode Selection Buttons -->
   <div class="mode-selector">
-    <button class="mode-btn" data-mode="evolve" id="btn-evolve">Evolve Mode</button>
-    <button class="mode-btn" data-mode="manual" id="btn-manual">Manual Mode</button>
-    <button class="mode-btn" data-mode="demo" id="btn-demo">Demo Mode</button>
+    <button class="mode-btn active" data-mode="evolve" id="btn-evolve">Evolve</button>
+    <button class="mode-btn" data-mode="manual" id="btn-manual">Manual</button>
+    <button class="mode-btn" data-mode="demo" id="btn-demo">Demo</button>
   </div>
 
-  <!-- ===== EVOLVE MODE ===== -->
-  <div class="mode-content" id="evolve-mode">
-    <div class="evo-container">
-      <div class="evo-left">
-        <div style="display:flex; gap:12px; align-items:flex-start;">
-          <div style="flex:1">
-            <div class="pattern-label">Target Pattern (Click to Edit)</div>
-            <canvas id="targetVizCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+  <main class="main-content">
+    <!-- ===== EVOLVE MODE ===== -->
+    <div class="mode-content" id="evolve-mode" style="display: block;">
+      <div class="container">
+        <div class="left-panel">
+           <div class="card canvas-grid">
+               <div>
+                   <div class="pattern-label">Target Pattern (Click to Edit)</div>
+                   <canvas id="targetVizCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+               </div>
+               <div>
+                   <div class="pattern-label">Best Solution (so far)</div>
+                   <canvas id="evolveBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+               </div>
+               <div>
+                   <div class="pattern-label">Generation Sample</div>
+                   <canvas id="evolveCurrentCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+               </div>
+           </div>
+           <div class="card" style="display: flex; gap: 1rem; flex-grow: 1;">
+              <div class="chart-container">
+                <div class="pattern-label">Fitness Progress</div>
+                <canvas id="fitnessDistCanvas" class="chart-canvas"></canvas>
+              </div>
+              <div class="chart-container">
+                <div class="pattern-label">Population Diversity</div>
+                <canvas id="diversityCanvas" class="chart-canvas"></canvas>
+              </div>
+           </div>
+        </div>
+
+        <div class="right-panel">
+          <div class="card">
+            <div class="pattern-label">Controls</div>
+            <div class="controls">
+              <button id="startBtn">Start Evolution</button>
+              <button id="stopBtn" disabled>Stop Evolution</button>
+            </div>
           </div>
 
-          <div style="width:240px;">
-            <div class="pattern-label">Best Solution (so far)</div>
-            <canvas id="evolveBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-
-            <div class="pattern-label" style="margin-top:12px;">Generation Sample</div>
-            <canvas id="evolveCurrentCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+          <div class="card">
+            <div class="pattern-label">Evolution Settings</div>
+            <div class="param-grid">
+              <label>Population:</label> <input type="number" id="population" value="100" min="10" />
+              <label>Steps:</label> <input type="number" id="steps" value="12" min="1" />
+              <label>Generations:</label> <input type="number" id="generations" value="100" min="1" />
+              <label>Elite Fraction:</label> <input type="number" id="elite" value="0.2" min="0" max="1" step="0.1" />
+              <label>Mutation Rate:</label> <input type="number" id="mut" value="0.1" min="0" max="1" step="0.01" />
+              <label>Viz Frequency:</label> <input type="number" id="vizFreq" value="5" min="1" />
+            </div>
+          </div>
+          
+          <div class="card" style="flex-grow: 1;">
+            <div class="pattern-label">Evolution Stats</div>
+            <div class="stats-box" id="statsDiv">
+              Click the target pattern to draw, then press Start.
+            </div>
           </div>
         </div>
-
-        <div class="chart-container">
-          <div class="pattern-label">Fitness Progress</div>
-          <canvas id="fitnessDistCanvas" width="500" height="200" style="width:100%;max-width:500px;height:200px;"></canvas>
-        </div>
-
-        <div class="chart-container">
-          <div class="pattern-label">Action Usage (Population vs Best)</div>
-          <canvas id="actionUsageCanvas" width="500" height="150" style="width:100%;max-width:500px;height:150px;"></canvas>
-        </div>
-      </div>
-
-      <div class="evo-right">
-        <div class="pattern-label">Controls & Parameters</div>
-        <div class="controls">
-          <button id="startBtn">Start Evolution</button>
-          <button id="stopBtn" disabled>Stop Evolution</button>
-        </div>
-
-        <div class="stats-box" style="margin-bottom: 16px;">
-          <p style="font-weight: 700; margin-bottom: 8px; margin-top: 0;">Evolution Settings:</p>
-          <div class="param-grid">
-            <label>Population:</label>
-            <input type="number" id="population" value="50" min="10" />
-            
-            <label>Steps:</label>
-            <input type="number" id="steps" value="12" min="1" />
-            
-            <label>Generations:</label>
-            <input type="number" id="generations" value="100" min="1" />
-            
-            <label>Elite Fraction:</label>
-            <input type="number" id="elite" value="0.2" min="0" max="1" step="0.1" />
-            
-            <label>Mutation Rate:</label>
-            <input type="number" id="mut" value="0.1" min="0" max="1" step="0.01" />
-            
-            <label>Viz Frequency:</label>
-            <input type="number" id="vizFreq" value="5" min="1" />
-          </div>
-          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px;">
-            <input type="checkbox" id="vizToggle" checked />
-            Enable Visualization
-          </label>
-        </div>
-
-        <div class="pattern-label">Evolution Stats</div>
-        <div class="stats-box" id="statsDiv">
-          Click cells above to create a target pattern, or use Manual mode.
-        </div>
       </div>
     </div>
+
+    <!-- ===== MANUAL MODE ===== -->
+    <div class="mode-content" id="manual-mode">
+        <div class="container">
+            <div class="left-panel">
+                <div class="card canvas-grid">
+                    <div>
+                        <div class="pattern-label">Manual Canvas</div>
+                        <canvas id="manualDemoCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                    <div>
+                        <div class="pattern-label">Target Pattern</div>
+                        <canvas id="manualTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="pattern-label">Instructions</div>
+                    <div class="stats-box">
+                        • <strong>Arrow Keys:</strong> Move agent<br>
+                        • <strong>Space:</strong> Evolve CA one step (do nothing action)<br>
+                        • <strong>0-F:</strong> Write 2×2 pattern at agent location<br>
+                        • <strong>S:</strong> Save manual canvas to target pattern<br>
+                        • An action (move/write) is always followed by a CA step.<br>
+                        • The game freezes at <span id="manualMaxStepsLabel">10</span> steps. Use Reset to play again.
+                    </div>
+                </div>
+            </div>
+            <div class="right-panel">
+                <div class="card">
+                    <div class="pattern-label">Controls</div>
+                    <div class="controls">
+                        <button id="savePatternBtn">Save Manual → Target (S)</button>
+                        <button id="clearPatternBtn">Clear Target</button>
+                        <button id="manualResetBtn">Reset Manual Canvas</button>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="pattern-label">Current Stats</div>
+                    <div class="stats-box" id="manualStats">
+                        Step: <strong>0/10</strong><br>
+                        Agent Position: <strong>(6, 6)</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== DEMO MODE ===== -->
+    <div class="mode-content" id="demo-mode">
+        <div class="container">
+            <div class="left-panel">
+                <div class="card canvas-grid">
+                    <div>
+                        <div class="pattern-label">Target Pattern</div>
+                        <canvas id="demoTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                    <div>
+                        <div class="pattern-label">Playback (Step: <span id="demoStep">0</span>/<span id="demoMaxSteps">0</span>)</div>
+                        <canvas id="demoBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="pattern-label">Action Sequence</div>
+                    <canvas id="demoActionsCanvas" style="width:100%; height:40px;"></canvas>
+                </div>
+            </div>
+            <div class="right-panel">
+                <div class="card">
+                    <div class="pattern-label">Playback Controls</div>
+                    <div class="controls">
+                        <button id="demoPlayBtn">Play</button>
+                        <button id="demoPauseBtn" disabled>Pause</button>
+                        <button id="demoStepBtn">Step</button>
+                        <button id="demoResetBtn">Reset</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+  </main>
+  
+  <div class="log-container">
+      <div class="pattern-label">Log</div>
+      <div id="log"></div>
   </div>
 
-  <!-- ===== MANUAL MODE ===== -->
-  <div class="mode-content" id="manual-mode">
-    <div style="display:flex; gap:24px; align-items:flex-start; margin-bottom:16px;">
-      <div style="flex:1">
-        <div class="pattern-label">Demo Canvas (editable via keyboard actions)</div>
-        <canvas id="manualDemoCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-      </div>
-
-      <div style="width:240px;">
-        <div class="pattern-label">Target Pattern (Click to Edit)</div>
-        <canvas id="manualTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-
-        <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="savePatternBtn">Save Demo → Target (S)</button>
-          <button id="clearPatternBtn">Clear Target</button>
-          <button id="manualResetBtn">Reset Demo (C)</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="manual-container">
-      <div class="manual-left">
-        <div class="pattern-label">Instructions</div>
-        <div class="stats-box">
-          <strong>Controls (Manual Mode):</strong><br>
-          • Arrow Keys: Move agent on the demo canvas<br>
-          • Space: Evolve CA one step (on demo canvas)<br>
-          • 0-F: Write 2×2 pattern centered at the agent on the demo canvas<br>
-          • S: Copy demo canvas into target pattern (the target canvas is editable by clicking)<br>
-          • C: Reset demo canvas (via button)<br>
-          <br>
-          <strong>Note:</strong> The game freezes at {MANUAL_MAX_STEPS} steps. Use Reset to continue.
-        </div>
-      </div>
-
-      <div class="manual-right">
-        <div class="pattern-label">Current Stats</div>
-        <div class="stats-box" id="manualStats">
-          Step: <strong>0/10</strong><br>
-          Agent Position: <strong>(6, 6)</strong><br>
-          Density: <strong>0.00</strong>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===== DEMO MODE ===== -->
-  <div class="mode-content" id="demo-mode">
-    <div class="demo-container">
-      <div class="demo-section">
-        <div class="pattern-label">Target Pattern</div>
-        <canvas id="demoTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-      </div>
-
-      <div class="demo-section">
-        <div class="pattern-label">Playback (Step: <span id="demoStep">0</span>/<span id="demoMaxSteps">0</span>)</div>
-        <canvas id="demoBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-        
-        <div class="controls">
-          <button id="demoPlayBtn">Play</button>
-          <button id="demoPauseBtn" disabled>Pause</button>
-          <button id="demoStepBtn">Step</button>
-          <button id="demoResetBtn">Reset</button>
-        </div>
-      </div>
-
-      <div class="demo-section" style="min-width: 400px;">
-        <div class="pattern-label">Action Sequence</div>
-        <canvas id="demoActionsCanvas" width="400" height="40"></canvas>
-        
-        <div class="pattern-label" style="margin-top: 16px;">Info</div>
-        <div class="stats-box" id="demoInfo">
-          No sequence loaded. Run Evolve Mode first.
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Log section (visible across all modes) -->
-  <div class="pattern-label" style="margin-top: 24px;">Log</div>
-  <div id="log"></div>
-
-  <!-- Hidden elements for compatibility -->
-  <canvas id="seqStrip" style="display: none;"></canvas>
-  <canvas id="patternCanvas" style="display: none;"></canvas>
 </body>
 </html>
