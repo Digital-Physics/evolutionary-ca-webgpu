@@ -155,13 +155,15 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   for (var s: u32 = 0; s < params.steps; s = s + 1) {
     let action_index = inputSequences[sequence_offset + s];
 
+    // 1. Evolve the grid by one step of Conway's Game of Life first
+    conway_step(&current_state);
+    
+    // 2. Then apply user action (move, write, or nothing)
     if (action_index <= 3u) {
         apply_action_move(&current_state, action_index);
     } else if (action_index >= 5u) {
         apply_action_write(&current_state, action_index);
     }
-    
-    conway_step(&current_state);
   }
 
   var matches: u32 = 0u;
@@ -243,8 +245,8 @@ function evaluateSequenceToGrid(seq) {
     let state = new Uint8Array(currentInitialState);
     let agent = { x: 5, y: 5 };
     for (const actionIndex of seq) {
-        state = new Uint8Array(applyAction(state, actionIndex, agent));
         state = new Uint8Array(conwayStep(state));
+        state = new Uint8Array(applyAction(state, actionIndex, agent));
     }
     return state;
 }
@@ -397,15 +399,15 @@ function handleManualKeyDown(e) {
     }
     else if (/^[0-9a-f]$/.test(key)) {
         const patternNum = parseInt(key, 16);
-        actionIndex = 5 + (15 - patternNum);
+        actionIndex = 5 + patternNum;
     }
     if (actionIndex !== -1) {
         e.preventDefault();
         const agentPos = { x: manualAgentX, y: manualAgentY };
+        manualDemoState = new Uint8Array(conwayStep(manualDemoState));
         manualDemoState = new Uint8Array(applyAction(manualDemoState, actionIndex, agentPos));
         manualAgentX = agentPos.x;
         manualAgentY = agentPos.y;
-        manualDemoState = new Uint8Array(conwayStep(manualDemoState));
         manualStep++;
         actionTaken = true;
     }
@@ -833,10 +835,10 @@ function demoStepForward(ui) {
         return;
     const actionIndex = bestSequence[demoPlaybackStep];
     const agentPos = { x: demoAgentX, y: demoAgentY };
+    demoPlaybackState = conwayStep(demoPlaybackState);
     demoPlaybackState = applyAction(demoPlaybackState, actionIndex, agentPos);
     demoAgentX = agentPos.x;
     demoAgentY = agentPos.y;
-    demoPlaybackState = conwayStep(demoPlaybackState);
     demoPlaybackStep++;
     updateDemoDisplay(ui);
     if (demoPlaybackStep >= bestSequence.length) {
