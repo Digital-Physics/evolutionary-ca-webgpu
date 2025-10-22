@@ -237,6 +237,13 @@
                    <div class="pattern-label">Generation Sample</div>
                    <canvas id="evolveCurrentCanvas" class="pattern-canvas" width="240" height="240"></canvas>
                </div>
+
+               <div class="card">
+                  <div class="pattern-label">Top 5 Sequences</div>
+                  <div id="top5List" style="max-height: 200px; overflow-y: auto;">
+                  No sequences yet
+              </div>
+          </div>
            </div>
            <div class="card" style="display: flex; gap: 1rem; flex-grow: 1;">
               <div class="chart-container">
@@ -278,12 +285,6 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="pattern-label">Top 5 Sequences</div>
-            <div id="top5List" style="max-height: 200px; overflow-y: auto;">
-              No sequences yet
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -307,7 +308,7 @@
                     <div class="stats-box">
                         • <strong>Goal:</strong> Match Target Pattern at step <span id="manualMaxStepsLabel">12</span> (See 'Steps' settings in Evolve mode)<br>
                         • <strong>Actions:</strong><br>
-                        • <strong>4 Arrow Keys:</strong> Move 2x2 write window<br>
+                        • <strong>4 Arrow Keys:</strong> Move 2x2 write window Up, Down, Left, Right<br>
                         • <strong>1 Space Bar:</strong> Pass<br>
                         • <strong>16 Hex Keys(0-9 & A-F):</strong> Write a 2×2 pattern<br>
                         • <strong>Update Rule:</strong> An action (move/pass/write) is always preceded by a GoL update step.<br>
@@ -328,8 +329,6 @@
                 <div class="card">
                     <div class="pattern-label">Current Stats</div>
                     <div class="stats-box" id="manualStats">
-                        Step: <strong>0/12</strong><br>
-                        Write Window Position: <strong>(5, 5)</strong>
                     </div>
                 </div>
             </div>

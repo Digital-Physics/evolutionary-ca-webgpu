@@ -386,7 +386,7 @@ function updateManualDisplay() {
   renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
   ui.manualStats.innerHTML = `
     Step: <strong>${manualStep}/${maxSteps}</strong><br>
-    Agent Position: <strong>(${manualAgentX}, ${manualAgentY})</strong>
+    Write Pattern Window: <strong>(${manualAgentX}, ${manualAgentY})</strong>
   `;
 }
 
@@ -518,7 +518,7 @@ function formatSequence(seq: Uint32Array, maxLen: number = 12): string {
 
 function updateTop5Display(ui: UIElements) {
   let html = '<div style="font-family: monospace; font-size: 0.75rem; line-height: 1.4;">';
-  html += '<strong>TOP 5 SEQUENCES</strong><br>';
+  html += '<strong>TOP 5 SEQUENCES across all generations</strong><br>';
   html += '═══════════════════════<br>';
   
   if (top5Sequences.length === 0) {
@@ -653,6 +653,7 @@ async function runEvolution(ui: UIElements) {
       }
     }
     
+    console.log("top 5", top5Sequences);
     top5Sequences.sort((a, b) => b.fitness - a.fitness);
     top5Sequences = top5Sequences.slice(0, 5);
     
