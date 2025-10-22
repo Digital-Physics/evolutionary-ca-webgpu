@@ -27,10 +27,9 @@
         flex-grow: 1;
         display: flex;
         flex-direction: column;
-        min-height: 0; /* Important for flex-grow in a flex column */
+        min-height: 0;
     }
     
-    /* Mode Selector */
     .mode-selector {
       display: flex;
       gap: 0.75rem;
@@ -63,7 +62,7 @@
     .mode-content { 
       display: none;
       flex-grow: 1;
-      overflow: hidden; /* Prevent content from overflowing its container */
+      overflow: hidden;
     }
 
     .container {
@@ -96,7 +95,6 @@
         box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
     }
 
-    /* Canvas Styles */
     canvas {
       border: 1px solid #e2e8f0;
       background-color: #fff;
@@ -118,7 +116,6 @@
       font-size: 0.875rem;
     }
 
-    /* Stats Box */
     .stats-box {
       line-height: 1.6;
       font-size: 0.875rem;
@@ -126,7 +123,6 @@
     }
     .stats-box strong { color: #2b6cb0; }
     
-    /* Controls Styling */
     .controls {
       display: flex;
       gap: 0.5rem;
@@ -201,7 +197,10 @@
         gap: 0.5rem;
     }
 
-    /* Responsive adjustments */
+    #demoActionsCanvas {
+        min-height: 80px;
+    }
+
     @media (max-width: 768px) {
       body { padding: 1rem; gap: 1rem; }
       .container { flex-direction: column; }
@@ -212,7 +211,7 @@
   </style>
 </head>
 <body>
-  <h1>Evolutionary Cellular Automata Solutions (w/WebGPU compute shater)</h1>
+  <h1>Evolutionary Cellular Automata Solutions (w/WebGPU compute shader)</h1>
 
   <div class="mode-selector">
     <button class="mode-btn active" data-mode="evolve" id="btn-evolve">Evolve</button>
@@ -278,6 +277,13 @@
               Click the target pattern to draw, then press Start.
             </div>
           </div>
+
+          <div class="card">
+            <div class="pattern-label">Top 5 Sequences</div>
+            <div id="top5List" style="max-height: 200px; overflow-y: auto;">
+              No sequences yet
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -302,9 +308,8 @@
                         • <strong>Arrow Keys:</strong> Move agent<br>
                         • <strong>Space:</strong> Evolve CA one step (do nothing action)<br>
                         • <strong>0-F:</strong> Write 2×2 pattern at agent location<br>
-                        • <strong>S:</strong> Save manual canvas to target pattern<br>
                         • An action (move/write) is always followed by a CA step.<br>
-                        • The game freezes at <span id="manualMaxStepsLabel">10</span> steps. Use Reset to play again.
+                        • The game freezes at <span id="manualMaxStepsLabel">12</span> steps (matches Steps setting in Evolve mode). Use Reset to play again.
                     </div>
                 </div>
             </div>
@@ -312,7 +317,7 @@
                 <div class="card">
                     <div class="pattern-label">Controls</div>
                     <div class="controls">
-                        <button id="savePatternBtn">Save Manual → Target (S)</button>
+                        <button id="savePatternBtn">Save Manual Canvas to Target</button>
                         <button id="clearPatternBtn">Clear Target</button>
                         <button id="manualResetBtn">Reset Manual Canvas</button>
                     </div>
@@ -320,8 +325,8 @@
                 <div class="card">
                     <div class="pattern-label">Current Stats</div>
                     <div class="stats-box" id="manualStats">
-                        Step: <strong>0/10</strong><br>
-                        Agent Position: <strong>(6, 6)</strong>
+                        Step: <strong>0/12</strong><br>
+                        Agent Position: <strong>(5, 5)</strong>
                     </div>
                 </div>
             </div>
@@ -344,7 +349,7 @@
                 </div>
                 <div class="card">
                     <div class="pattern-label">Action Sequence</div>
-                    <canvas id="demoActionsCanvas" style="width:100%; height:40px;"></canvas>
+                    <div id="demoActionsCanvas"></div>
                 </div>
             </div>
             <div class="right-panel">
