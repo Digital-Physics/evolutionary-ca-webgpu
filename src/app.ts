@@ -195,12 +195,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let idx = global_id.x;
   if (idx >= params.batchSize) { return; }
 
-  let state_size = params.gridSize * params.gridSize;
-  let state_offset = idx * state_size;
+  let grid_cell_count = params.gridSize * params.gridSize;
+  let state_offset = idx * grid_cell_count;
 
   // Load initial state for this invocation
   var current_state: array<u32, 144>;
-  for (var i: u32 = 0; i < state_size; i = i + 1) {
+  for (var i: u32 = 0; i < grid_cell_count; i = i + 1) {
     current_state[i] = inputStates[state_offset + i];
   }
   // Initialize agent position in the center
@@ -225,17 +225,17 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
   // --- Fitness Calculation ---
   var matches: u32 = 0u;
-  for (var i2: u32 = 0; i2 < state_size; i2 = i2 + 1) {
+  for (var i2: u32 = 0; i2 < grid_cell_count; i2 = i2 + 1) {
     if (current_state[i2] == targetPattern[i2]) {
       matches = matches + 1u;
     }
   }
 
   // Fitness is the percentage of matching cells (0-100)
-  fitness[idx] = (matches * 100u) / state_size;
+  fitness[idx] = (matches * 100u) / grid_cell_count;
   
   // Write final state to output buffer
-  for (var i3: u32 = 0; i3 < state_size; i3 = i3 + 1) {
+  for (var i3: u32 = 0; i3 < grid_cell_count; i3 = i3 + 1) {
     outputStates[state_offset + i3] = current_state[i3];
   }
 }
