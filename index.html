@@ -294,7 +294,7 @@
             <div class="left-panel">
                 <div class="card canvas-grid">
                     <div>
-                        <div class="pattern-label">Manual Canvas</div>
+                        <div class="pattern-label">Game Board</div>
                         <canvas id="manualDemoCanvas" class="pattern-canvas" width="240" height="240"></canvas>
                     </div>
                     <div>
@@ -303,13 +303,16 @@
                     </div>
                 </div>
                 <div class="card">
-                    <div class="pattern-label">Instructions</div>
+                    <div class="pattern-label">Instructions - Game of Life (GoL) Pattern Matching Game</div>
                     <div class="stats-box">
-                        • <strong>Arrow Keys:</strong> Move agent<br>
-                        • <strong>Space:</strong> Evolve CA one step (do nothing action)<br>
-                        • <strong>0-F:</strong> Write 2×2 pattern at agent location<br>
-                        • An action (move/pass/write) is always preceded by a CA step.<br>
-                        • The game freezes at <span id="manualMaxStepsLabel">12</span> steps (matches Steps setting in Evolve mode). Use Reset to play again.
+                        • <strong>Goal:</strong> Match Target Pattern at step <span id="manualMaxStepsLabel">12</span> (See 'Steps' settings in Evolve mode)<br>
+                        • <strong>Actions:</strong><br>
+                        • <strong>4 Arrow Keys:</strong> Move 2x2 write window<br>
+                        • <strong>1 Space Bar:</strong> Pass<br>
+                        • <strong>16 Hex Keys(0-9 & A-F):</strong> Write a 2×2 pattern<br>
+                        • <strong>Update Rule:</strong> An action (move/pass/write) is always preceded by a GoL update step.<br>
+                        • <strong>Reset Game:</strong> Use the Reset Game button to play again. <br>
+                        • <strong>Save Game State as Target Pattern:</strong> Save the current game state as the new target pattern using this button (Or modify the target pattern directly).
                     </div>
                 </div>
             </div>
@@ -317,16 +320,16 @@
                 <div class="card">
                     <div class="pattern-label">Controls</div>
                     <div class="controls">
-                        <button id="savePatternBtn">Save Manual Canvas to Target</button>
-                        <button id="clearPatternBtn">Clear Target</button>
-                        <button id="manualResetBtn">Reset Manual Canvas</button>
+                        <button id="savePatternBtn">Save Game State as Target Pattern</button>
+                        <!-- <button id="clearPatternBtn">Clear Target</button> -->
+                        <button id="manualResetBtn">Reset Game</button>
                     </div>
                 </div>
                 <div class="card">
                     <div class="pattern-label">Current Stats</div>
                     <div class="stats-box" id="manualStats">
                         Step: <strong>0/12</strong><br>
-                        Agent Position: <strong>(5, 5)</strong>
+                        Write Window Position: <strong>(5, 5)</strong>
                     </div>
                 </div>
             </div>

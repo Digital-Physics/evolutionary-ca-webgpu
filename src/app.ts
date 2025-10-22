@@ -13,7 +13,7 @@ type UIElements = {
   startBtn: HTMLButtonElement;
   stopBtn: HTMLButtonElement;
   log: HTMLElement;
-  clearPatternBtn: HTMLButtonElement;
+  // clearPatternBtn: HTMLButtonElement;
   savePatternBtn: HTMLButtonElement;
   statsDiv: HTMLElement;
   manualDemoCanvas: HTMLCanvasElement;
@@ -337,7 +337,7 @@ function getUIElements(): UIElements {
     manualTargetCanvas: document.getElementById('manualTargetCanvas') as HTMLCanvasElement,
     manualStats: document.getElementById('manualStats') as HTMLElement,
     manualMaxStepsLabel: document.getElementById('manualMaxStepsLabel') as HTMLElement,
-    clearPatternBtn: document.getElementById('clearPatternBtn') as HTMLButtonElement,
+    // clearPatternBtn: document.getElementById('clearPatternBtn') as HTMLButtonElement,
     savePatternBtn: document.getElementById('savePatternBtn') as HTMLButtonElement,
     demoTargetCanvas: document.getElementById('demoTargetCanvas') as HTMLCanvasElement,
     demoBestCanvas: document.getElementById('demoBestCanvas') as HTMLCanvasElement,
@@ -418,10 +418,10 @@ function initManualMode(ui: UIElements) {
         updateManualDisplay();
     });
 
-    ui.clearPatternBtn.addEventListener('click', () => {
-        sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
-        updateManualDisplay();
-    });
+    // ui.clearPatternBtn.addEventListener('click', () => {
+    //     sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
+    //     updateManualDisplay();
+    // });
 
     ui.manualResetBtn.addEventListener('click', () => {
         manualDemoState.fill(0);

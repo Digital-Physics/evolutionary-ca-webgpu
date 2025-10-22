@@ -290,7 +290,7 @@ function getUIElements() {
         manualTargetCanvas: document.getElementById('manualTargetCanvas'),
         manualStats: document.getElementById('manualStats'),
         manualMaxStepsLabel: document.getElementById('manualMaxStepsLabel'),
-        clearPatternBtn: document.getElementById('clearPatternBtn'),
+        // clearPatternBtn: document.getElementById('clearPatternBtn') as HTMLButtonElement,
         savePatternBtn: document.getElementById('savePatternBtn'),
         demoTargetCanvas: document.getElementById('demoTargetCanvas'),
         demoBestCanvas: document.getElementById('demoBestCanvas'),
@@ -367,10 +367,10 @@ function initManualMode(ui) {
         log(ui.log, 'Saved manual canvas to shared target pattern.');
         updateManualDisplay();
     });
-    ui.clearPatternBtn.addEventListener('click', () => {
-        sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
-        updateManualDisplay();
-    });
+    // ui.clearPatternBtn.addEventListener('click', () => {
+    //     sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
+    //     updateManualDisplay();
+    // });
     ui.manualResetBtn.addEventListener('click', () => {
         manualDemoState.fill(0);
         manualStep = 0;
