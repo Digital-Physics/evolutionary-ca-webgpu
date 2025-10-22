@@ -13,7 +13,6 @@ type UIElements = {
   startBtn: HTMLButtonElement;
   stopBtn: HTMLButtonElement;
   log: HTMLElement;
-  // clearPatternBtn: HTMLButtonElement;
   savePatternBtn: HTMLButtonElement;
   statsDiv: HTMLElement;
   manualDemoCanvas: HTMLCanvasElement;
@@ -22,9 +21,8 @@ type UIElements = {
   manualMaxStepsLabel: HTMLElement;
   demoTargetCanvas: HTMLCanvasElement;
   demoBestCanvas: HTMLCanvasElement;
-  demoActionsCanvas: HTMLCanvasElement;
-  demoStep: HTMLElement;
-  demoMaxSteps: HTMLElement;
+  demoActionsCanvas: HTMLElement;
+  demoPlaybackLabel: HTMLElement; // Replaces demoStep and demoMaxSteps
   demoPlayBtn: HTMLButtonElement;
   demoPauseBtn: HTMLButtonElement;
   demoResetBtn: HTMLButtonElement;
@@ -293,6 +291,21 @@ function evaluateSequenceToGrid(seq: Uint32Array | null): Uint8Array | null {
     return state;
 }
 
+// --- NEW HELPER FOR STATS ---
+function calculateMatchPercentage(gridA: Uint8Array, gridB: Uint8Array | null): number {
+    if (!gridB) return 0;
+    const size = GRID_SIZE * GRID_SIZE;
+    if (gridA.length !== size || gridB.length !== size) return 0;
+    let matches = 0;
+    for (let i = 0; i < size; i++) {
+        if (gridA[i] === gridB[i]) {
+            matches++;
+        }
+    }
+    return (matches / size) * 100;
+}
+
+
 // --- RENDERING ---
 function renderGrid(canvas: HTMLCanvasElement, grid: Uint8Array | null, cellColor: string = '#4299e1', showAgent: boolean = false, agentX: number = 0, agentY: number = 0) {
   const size = GRID_SIZE;
@@ -337,13 +350,11 @@ function getUIElements(): UIElements {
     manualTargetCanvas: document.getElementById('manualTargetCanvas') as HTMLCanvasElement,
     manualStats: document.getElementById('manualStats') as HTMLElement,
     manualMaxStepsLabel: document.getElementById('manualMaxStepsLabel') as HTMLElement,
-    // clearPatternBtn: document.getElementById('clearPatternBtn') as HTMLButtonElement,
     savePatternBtn: document.getElementById('savePatternBtn') as HTMLButtonElement,
     demoTargetCanvas: document.getElementById('demoTargetCanvas') as HTMLCanvasElement,
     demoBestCanvas: document.getElementById('demoBestCanvas') as HTMLCanvasElement,
-    demoActionsCanvas: document.getElementById('demoActionsCanvas') as HTMLCanvasElement,
-    demoStep: document.getElementById('demoStep') as HTMLElement,
-    demoMaxSteps: document.getElementById('demoMaxSteps') as HTMLElement,
+    demoActionsCanvas: document.getElementById('demoActionsCanvas') as HTMLElement,
+    demoPlaybackLabel: document.getElementById('demoPlaybackLabel') as HTMLElement,
     demoPlayBtn: document.getElementById('demoPlayBtn') as HTMLButtonElement,
     demoPauseBtn: document.getElementById('demoPauseBtn') as HTMLButtonElement,
     demoResetBtn: document.getElementById('demoResetBtn') as HTMLButtonElement,
@@ -384,15 +395,26 @@ function updateManualDisplay() {
   const maxSteps = Number(ui.steps.value);
   renderGrid(ui.manualDemoCanvas, manualDemoState, '#4299e1', true, manualAgentX, manualAgentY);
   renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
-  ui.manualStats.innerHTML = `
+  
+  const matchPercent = calculateMatchPercentage(manualDemoState, sharedTargetPattern);
+  
+  let statsHTML = `
     Step: <strong>${manualStep}/${maxSteps}</strong><br>
-    Write Pattern Window: <strong>(${manualAgentX}, ${manualAgentY})</strong>
+    Write Pattern Window: <strong>(${manualAgentX}, ${manualAgentY})</strong><br>
+    Pattern Match %: <strong>${matchPercent.toFixed(1)}%</strong>
   `;
+
+  if (manualStep >= maxSteps) {
+      statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
+  }
+
+  ui.manualStats.innerHTML = statsHTML;
 }
 
 function initManualMode(ui: UIElements) {
     const updateMaxSteps = () => {
         ui.manualMaxStepsLabel.textContent = ui.steps.value;
+        updateManualDisplay();
     };
     updateMaxSteps();
     ui.steps.addEventListener('change', updateMaxSteps);
@@ -407,6 +429,7 @@ function initManualMode(ui: UIElements) {
             const idx = y * GRID_SIZE + x;
             if (!sharedTargetPattern) sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
             sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
+            renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
             updateManualDisplay();
         }
     };
@@ -417,11 +440,6 @@ function initManualMode(ui: UIElements) {
         log(ui.log, 'Saved manual canvas to shared target pattern.');
         updateManualDisplay();
     });
-
-    // ui.clearPatternBtn.addEventListener('click', () => {
-    //     sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
-    //     updateManualDisplay();
-    // });
 
     ui.manualResetBtn.addEventListener('click', () => {
         manualDemoState.fill(0);
@@ -506,7 +524,8 @@ async function setupComputePipeline() {
 }
 
 function formatSequence(seq: Uint32Array, maxLen: number = 12): string {
-  const labels = ['↑','↓','←','→','∅', ...Array.from({length:16}, (_,i)=>(15-i).toString(16).toUpperCase())];
+  // FIX: Corrected labels to match keyboard input (0-F)
+  const labels = ['↑','↓','←','→','∅', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())];
   if (seq.length <= maxLen) {
     return Array.from(seq).map(a => labels[a]).join(' ');
   }
@@ -653,7 +672,6 @@ async function runEvolution(ui: UIElements) {
       }
     }
     
-    console.log("top 5", top5Sequences);
     top5Sequences.sort((a, b) => b.fitness - a.fitness);
     top5Sequences = top5Sequences.slice(0, 5);
     
@@ -677,7 +695,6 @@ async function runEvolution(ui: UIElements) {
       renderGrid(ui.evolveBestCanvas, evaluateSequenceToGrid(bestSequence), '#38a169');
       renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#c53030');
       
-      // Render random sample
       const randomIdx = Math.floor(Math.random() * batchSize);
       const randomSeq = populationSequences.slice(randomIdx * steps, (randomIdx + 1) * steps);
       renderGrid(ui.evolveCurrentCanvas, evaluateSequenceToGrid(randomSeq), '#4299e1');
@@ -694,20 +711,29 @@ async function runEvolution(ui: UIElements) {
       break;
     }
 
-    const sortedIndices2 = Array.from({ length: batchSize }, (_, i) => i).sort((a, b) => fitnessArray[b] - fitnessArray[a]);
     const newPopulation = new Uint32Array(batchSize * steps);
     const eliteCount = Math.floor(batchSize * eliteFrac);
     
     for (let i = 0; i < eliteCount; i++) {
-        const bestIdx = sortedIndices2[i];
+        const bestIdx = sortedIndices[i];
         newPopulation.set(populationSequences.slice(bestIdx * steps, (bestIdx + 1) * steps), i * steps);
     }
 
+    // --- FIX: Improved parent selection to prevent evolution stalling ---
     for (let i = eliteCount; i < batchSize; i++) {
-        const parentA_idx = sortedIndices2[Math.floor(Math.random() * batchSize * 0.5)];
-        const parentB_idx = sortedIndices2[Math.floor(Math.random() * batchSize * 0.5)];
+        // Rank-based selection (biased towards better solutions)
+        const r1 = Math.random();
+        const r2 = Math.random();
+        // Squaring the random number biases the selection towards the start of the sorted list (fitter individuals)
+        const parentA_rank = Math.floor(batchSize * r1 * r1);
+        const parentB_rank = Math.floor(batchSize * r2 * r2);
+        
+        const parentA_idx = sortedIndices[parentA_rank];
+        const parentB_idx = sortedIndices[parentB_rank];
+
         const parentA = populationSequences.slice(parentA_idx * steps, (parentA_idx + 1) * steps);
         const parentB = populationSequences.slice(parentB_idx * steps, (parentB_idx + 1) * steps);
+        
         const crossPoint = Math.floor(Math.random() * steps);
         const child = new Uint32Array(steps);
         for (let s = 0; s < steps; s++) {
@@ -731,6 +757,13 @@ async function runEvolution(ui: UIElements) {
 function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color: string, label: string}[], yLabel: string, xLabel: string, yMax: number) {
     const ctx = canvas.getContext('2d');
     if (!ctx || datasets.length === 0 || datasets[0].data.length === 0) return;
+    
+    // --- FIX: Resizing canvas drawing buffer to match display size to prevent stretching ---
+    const rect = canvas.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+    }
 
     const { width, height } = canvas;
     const p = { t: 30, r: 20, b: 40, l: 50 };
@@ -894,7 +927,16 @@ function updateDemoDisplay(ui: UIElements) {
 
   if (demoPlaybackState && bestSequence) {
     renderGrid(ui.demoBestCanvas, demoPlaybackState, '#4299e1', true, demoAgentX, demoAgentY);
-    ui.demoStep.textContent = demoPlaybackStep.toString();
+    
+    const matchPercent = calculateMatchPercentage(demoPlaybackState, sharedTargetPattern);
+    let statsHTML = `Playback (Step: ${demoPlaybackStep}/${bestSequence.length})<br>
+                     Pattern Match %: <strong>${matchPercent.toFixed(1)}%</strong>`;
+
+    if (demoPlaybackStep >= bestSequence.length) {
+        statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
+    }
+    ui.demoPlaybackLabel.innerHTML = statsHTML;
+
 
     const container = ui.demoActionsCanvas;
     container.innerHTML = '';
@@ -906,7 +948,7 @@ function updateDemoDisplay(ui: UIElements) {
     container.style.border = '1px solid #e2e8f0';
     container.style.borderRadius = '0.375rem';
 
-    const actionLabels = ['↑','↓','←','→','Space', ...Array.from({length:16}, (_,i)=>(15-i).toString(16).toUpperCase())];
+    const actionLabels = ['↑','↓','←','→','Space', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())];
 
     for (let i = 0; i < bestSequence.length; i++) {
       const wrapper = document.createElement('div');
@@ -971,7 +1013,6 @@ function resetDemo(ui: UIElements) {
   demoAgentX = 5;
   demoAgentY = 5;
 
-  ui.demoStep.textContent = '0';
   ui.demoPlayBtn.disabled = bestSequence === null;
   ui.demoPauseBtn.disabled = true;
   ui.demoStepBtn.disabled = bestSequence === null;
@@ -986,7 +1027,6 @@ function initializeDemoMode() {
     demoPlaybackState = new Uint8Array(GRID_SIZE*GRID_SIZE);
   } else {
     log(ui.log, `Loaded sequence with ${bestSequence.length} steps for demo.`);
-    ui.demoMaxSteps.textContent = bestSequence.length.toString();
   }
 
   ui.demoPlayBtn.onclick = () => {
@@ -1064,3 +1104,4 @@ function initApp() {
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
+

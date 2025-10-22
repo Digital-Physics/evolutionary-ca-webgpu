@@ -114,6 +114,7 @@
       margin-bottom: 0.5rem;
       color: #4a5568;
       font-size: 0.875rem;
+      line-height: 1.5;
     }
 
     .stats-box {
@@ -179,6 +180,8 @@
     .chart-container {
         flex-grow: 1;
         min-height: 150px;
+        display: flex;
+        flex-direction: column;
     }
     .chart-canvas {
         width: 100%;
@@ -322,7 +325,6 @@
                     <div class="pattern-label">Controls</div>
                     <div class="controls">
                         <button id="savePatternBtn">Save Game State as Target Pattern</button>
-                        <!-- <button id="clearPatternBtn">Clear Target</button> -->
                         <button id="manualResetBtn">Reset Game</button>
                     </div>
                 </div>
@@ -345,7 +347,8 @@
                         <canvas id="demoTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
                     </div>
                     <div>
-                        <div class="pattern-label">Playback (Step: <span id="demoStep">0</span>/<span id="demoMaxSteps">0</span>)</div>
+                        <!-- CHANGE: Replaced spans with a single div for easier stats update -->
+                        <div class="pattern-label" id="demoPlaybackLabel">Playback</div>
                         <canvas id="demoBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
                     </div>
                 </div>
