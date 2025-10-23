@@ -384,7 +384,9 @@ function initManualMode(ui) {
     const targetClickHandler = (e) => {
         const canvas = e.currentTarget;
         const rect = canvas.getBoundingClientRect();
-        const cell = canvas.width / GRID_SIZE;
+        const displayWidth = rect.width;
+        const cell = displayWidth / GRID_SIZE;
+        // const cell = canvas.width / GRID_SIZE;
         const x = Math.floor((e.clientX - rect.left) / cell);
         const y = Math.floor((e.clientY - rect.top) / cell);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
@@ -655,7 +657,7 @@ async function runEvolution(ui) {
         }
         if (bestFitness === 100) {
             log(ui.log, `Perfect match found in generation ${gen}!`);
-            // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution
+            // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution in the stats window
         }
         const newPopulation = new Uint32Array(batchSize * steps);
         const eliteCount = Math.floor(batchSize * eliteFrac);
@@ -1042,7 +1044,11 @@ function initApp() {
         if (!sharedTargetPattern)
             sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
         const rect = canvas.getBoundingClientRect();
-        const cell = canvas.width / GRID_SIZE;
+        // Use display size (rect) instead of canvas buffer size to handle click position after window is resized
+        const displayWidth = rect.width;
+        // const displayHeight = rect.height;
+        const cell = displayWidth / GRID_SIZE;
+        // const cell = canvas.width / GRID_SIZE;
         const x = Math.floor((e.clientX - rect.left) / cell);
         const y = Math.floor((e.clientY - rect.top) / cell);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
@@ -1056,6 +1062,6 @@ function initApp() {
     initManualMode(ui);
     handleModeChange(); // This will render the initial pattern
     log(ui.log, "App ready. Default target pattern loaded. Press 'Start Evolution' or go to Manual mode.");
-    log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader)');
+    log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader. Make sure your browser is WebGPU-compatible and enabled.');
 }
 window.addEventListener('DOMContentLoaded', initApp);

@@ -439,7 +439,11 @@ function initManualMode(ui: UIElements) {
     const targetClickHandler = (e: MouseEvent) => {
         const canvas = e.currentTarget as HTMLCanvasElement;
         const rect = canvas.getBoundingClientRect();
-        const cell = canvas.width / GRID_SIZE;
+        
+        const displayWidth = rect.width;
+        const cell = displayWidth / GRID_SIZE;
+        // const cell = canvas.width / GRID_SIZE;
+        
         const x = Math.floor((e.clientX - rect.left) / cell);
         const y = Math.floor((e.clientY - rect.top) / cell);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
@@ -450,8 +454,8 @@ function initManualMode(ui: UIElements) {
             updateManualDisplay();
         }
     };
-    ui.manualTargetCanvas.addEventListener('click', targetClickHandler);
 
+    ui.manualTargetCanvas.addEventListener('click', targetClickHandler);
     ui.savePatternBtn.addEventListener('click', () => {
         sharedTargetPattern = new Uint8Array(manualDemoState);
         log(ui.log, 'Saved manual canvas to shared target pattern.');
@@ -749,7 +753,7 @@ async function runEvolution(ui: UIElements) {
 
     if (bestFitness === 100) {
       log(ui.log, `Perfect match found in generation ${gen}!`);
-      // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution
+      // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution in the stats window
     }
 
     const newPopulation = new Uint32Array(batchSize * steps);
@@ -1186,7 +1190,13 @@ function initApp() {
     const canvas = e.currentTarget as HTMLCanvasElement;
     if (!sharedTargetPattern) sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
     const rect = canvas.getBoundingClientRect();
-    const cell = canvas.width / GRID_SIZE;
+
+    // Use display size (rect) instead of canvas buffer size to handle click position after window is resized
+    const displayWidth = rect.width;
+    // const displayHeight = rect.height;
+    const cell = displayWidth / GRID_SIZE;
+    // const cell = canvas.width / GRID_SIZE;
+
     const x = Math.floor((e.clientX - rect.left) / cell);
     const y = Math.floor((e.clientY - rect.top) / cell);
     
@@ -1196,6 +1206,7 @@ function initApp() {
       renderGrid(canvas, sharedTargetPattern, '#d6851bff');
     }
   };
+
   ui.targetVizCanvas.addEventListener('click', targetClickHandler);
   ui.demoTargetCanvas.addEventListener('click', targetClickHandler);
 
