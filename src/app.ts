@@ -395,11 +395,11 @@ function handleModeChange() {
 
   const ui = getUIElements();
   if (currentMode === 'manual') {
-    renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#187537ff');
+    // renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#187537ff');
     generateActionButtons(ui.manualActionsPanel, performManualAction); 
     updateManualDisplay();
   } else if (currentMode === 'evolve') {
-    renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#d6851bff');
+    renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#e29d43ff');
   } else if (currentMode === 'demo') {
     // initializeDemoMode calls generateActionButtons
     initializeDemoMode();
@@ -411,7 +411,7 @@ function updateManualDisplay() {
   const ui = getUIElements();
   const maxSteps = Number(ui.steps.value);
   renderGrid(ui.manualDemoCanvas, manualDemoState, '#4299e1', true, manualAgentX, manualAgentY);
-  renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c2862eff');
+  renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#e29d43ff');
   
   const matchPercent = calculateMatchPercentage(manualDemoState, sharedTargetPattern);
   
@@ -443,14 +443,14 @@ function initManualMode(ui: UIElements) {
         const displayWidth = rect.width;
         const cell = displayWidth / GRID_SIZE;
         // const cell = canvas.width / GRID_SIZE;
-        
+
         const x = Math.floor((e.clientX - rect.left) / cell);
         const y = Math.floor((e.clientY - rect.top) / cell);
         if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
             const idx = y * GRID_SIZE + x;
             if (!sharedTargetPattern) sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
             sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
-            renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#d6851bff');
+            renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#e29d43ff');
             updateManualDisplay();
         }
     };
@@ -738,7 +738,7 @@ async function runEvolution(ui: UIElements) {
         Best Sequence: <small>${bestSeqStr}</small>
       `;
       renderGrid(ui.evolveBestCanvas, evaluateSequenceToGrid(bestSequence), '#38a169');
-      renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#d6851bff');
+      renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#e29d43ff');
       
       const randomIdx = Math.floor(Math.random() * batchSize);
       const randomSeq = populationSequences.slice(randomIdx * steps, (randomIdx + 1) * steps);
@@ -1008,7 +1008,7 @@ function generateActionButtons(container: HTMLElement, clickHandler?: (actionInd
 
 
 function updateDemoDisplay(ui: UIElements) {
-  renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#d6851bff');
+  renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#e29d43ff');
 
   if (demoPlaybackState && bestSequence) {
     renderGrid(ui.demoBestCanvas, demoPlaybackState, '#4299e1', true, demoAgentX, demoAgentY);
@@ -1035,8 +1035,6 @@ function updateDemoDisplay(ui: UIElements) {
     container.style.border = '1px solid #e2e8f0';
     container.style.borderRadius = '0.375rem';
 
-    // const actionLabels = ['↑','↓','←','→','Space', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())]; // Moved to global constants
-
     for (let i = 0; i < bestSequence.length; i++) {
       const wrapper = document.createElement('div');
       wrapper.style.display = 'flex';
@@ -1045,7 +1043,7 @@ function updateDemoDisplay(ui: UIElements) {
       wrapper.style.gap = '2px';
       
       if (i === demoPlaybackStep) {
-        wrapper.style.backgroundColor = '#f6ad55';
+        wrapper.style.backgroundColor = '#71e859ff';
         wrapper.style.padding = '2px';
         wrapper.style.borderRadius = '4px';
       }
@@ -1203,7 +1201,7 @@ function initApp() {
     if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
       const idx = y * GRID_SIZE + x;
       sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
-      renderGrid(canvas, sharedTargetPattern, '#d6851bff');
+      renderGrid(canvas, sharedTargetPattern, '#e29d43ff');
     }
   };
 
