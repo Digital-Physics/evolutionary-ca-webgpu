@@ -1,10 +1,16 @@
-This is a partial Python-to-TypeScript-and-WepGPU port of a cellular automaton game that is learnable with evolutionary algorithms.
+# Evolving Action Sequence Solutions to a Pattern Matching Game in Conway's Game of Life
 
-There is a compute shader that evaluates sequences.
+This is a Python-to-TypeScript-and-WepGPU port of a cellular automaton game that is learnable with evolutionary algorithms.
 
-This parrallelization will be compared with regular web workers, which will most likely be the architecture in the final www.nets-vs-automata.net/rl.html verion.  
+There is a WebGPU compute shader that evaluates action sequences.
 
-Issues remain; Work in Progress. 
+This parrallelization of the evolutionary process will be compared with regular web workers, which will most likely be the architecture chosen for the final www.nets-vs-automata.net/rl.html website-integrated verion of this project.  
+
+Here's the stand-alone WebGPU website. 
+
+Make sure to have WebGPU options turned on and your in a compatible browser.
+
+evolutionary-ca-webgpu.onrender.com
 
 #
 

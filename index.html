@@ -2,23 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Evolutionary Cellular Automata Solutions</title>
+  <title>Evolving Action Solutions to a Game Of Life Game</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script type="module" src="./dist/app.js"></script>
   <style>
     * { box-sizing: border-box; }
-    html, body {
-      height: 100%;
+    html { height: 100%; }
+    body {
+      /* height: 100%; */ /* REMOVED */
       margin: 0;
       font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background: #f7fafc;
       color: #2d3748;
-    }
-    body {
       display: flex;
       flex-direction: column;
       padding: 1.5rem;
       gap: 1.5rem;
+      min-height: 100vh; 
+      overflow-y: auto; 
     }
     
     h1 { margin: 0; font-size: 1.75rem; color: #2c5282; }
@@ -62,13 +63,13 @@
     .mode-content { 
       display: none;
       flex-grow: 1;
-      overflow: hidden;
+      /* overflow: hidden; */ /* REMOVED */
     }
 
     .container {
         display: flex;
         gap: 1.5rem;
-        height: 100%;
+        /* height: 100%; */ /* REMOVED */
     }
 
     .left-panel {
@@ -203,6 +204,57 @@
     #demoActionsCanvas {
         min-height: 80px;
     }
+    
+    /* --- Styles for Manual Action buttons --- */
+    .actions-panel {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      padding: 8px;
+      background-color: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 0.375rem;
+      overflow-y: auto; /* For small screens */
+      max-height: 250px; /* Limit height and allow scroll */
+    }
+    .action-btn-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 4px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      min-width: 48px; /* Ensure buttons have some width */
+    }
+    .action-btn-wrapper.clickable {
+       cursor: pointer;
+       border: 1px solid #3182ce; /* UPDATED */
+       background-color: #4299e1; /* UPDATED */
+       transition: all 0.2s;
+       box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* Softer shadow */
+    }
+    .action-btn-wrapper.clickable:hover {
+        border-color: #3182ce; /* UPDATED */
+        background-color: #3182ce; /* UPDATED */
+    }
+    .action-btn-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #2d3748;
+    }
+    .action-btn-type {
+      font-size: 9px;
+      color: #718096;
+      text-transform: uppercase;
+    }
+    /* Make text white on blue buttons */
+    .action-btn-wrapper.clickable .action-btn-label,
+    .action-btn-wrapper.clickable .action-btn-type {
+        color: #fff;
+    }
+
 
     @media (max-width: 768px) {
       body { padding: 1rem; gap: 1rem; }
@@ -214,12 +266,12 @@
   </style>
 </head>
 <body>
-  <h1>Evolutionary Cellular Automata Solutions (w/WebGPU compute shader)</h1>
+  <h1>Evolving Action Sequence Solutions to a Pattern Matching Game in Conway's Game of Life</h1>
 
   <div class="mode-selector">
-    <button class="mode-btn active" data-mode="evolve" id="btn-evolve">Evolve</button>
-    <button class="mode-btn" data-mode="manual" id="btn-manual">Manual</button>
-    <button class="mode-btn" data-mode="demo" id="btn-demo">Demo</button>
+        <button class="mode-btn" data-mode="manual" id="btn-manual">Manual Play</button>
+    <button class="mode-btn active" data-mode="evolve" id="btn-evolve">Evolve A Solution</button>
+    <button class="mode-btn" data-mode="demo" id="btn-demo">Demo Evolved Solution</button>
   </div>
 
   <main class="main-content">
@@ -244,7 +296,6 @@
                <div class="card">
                   <div class="pattern-label">Best Action Sequences</div>
                   <div id="top5List" style="max-height: 200px; overflow-y: auto;">
-                  No sequences yet
               </div>
           </div>
            </div>
@@ -272,10 +323,10 @@
           <div class="card">
             <div class="pattern-label">Evolution Settings</div>
             <div class="param-grid">
-              <label>Population:</label> <input type="number" id="population" value="100" min="10" />
-              <label>Steps:</label> <input type="number" id="steps" value="12" min="1" />
+              <label>Population:</label> <input type="number" id="population" value="500" min="10" />
+              <label>Steps:</label> <input type="number" id="steps" value="10" min="1" />
               <label>Generations:</label> <input type="number" id="generations" value="100" min="1" />
-              <label>Elite Fraction:</label> <input type="number" id="elite" value="0.2" min="0" max="1" step="0.1" />
+              <label>Elite Fraction:</label> <input type="number" id="elite" value="0.05" min="0" max="1" step="0.1" />
               <label>Mutation Rate:</label> <input type="number" id="mut" value="0.1" min="0" max="1" step="0.01" />
               <label>Viz Frequency:</label> <input type="number" id="vizFreq" value="5" min="1" />
             </div>
@@ -297,12 +348,20 @@
         <div class="container">
             <div class="left-panel">
                 <div class="card">
-                    <div class="pattern-label">Game Play Controls</div>
+                    <div class="pattern-label">Game Meta-Controls</div>
                     <div class="controls">
                         <button id="savePatternBtn">Save Game State as Target Pattern</button>
                         <button id="manualResetBtn">Reset Game</button>
                     </div>
                 </div>
+                <!-- --- Action Panel for Manual Mode --- -->
+                <div class="card">
+                    <div class="pattern-label">Game Play Actions</div>
+                    <div id="manualActionsPanel" class="actions-panel">
+                        <!-- Buttons will be generated here -->
+                    </div>
+                </div>
+                <!-- --- END --- -->
                 <div class="card canvas-grid">
                     <div>
                         <div class="pattern-label">Game Board</div>
@@ -322,10 +381,11 @@
                     <div class="pattern-label">Instructions - Game of Life (GoL) Pattern Matching Game</div>
                     <div class="stats-box">
                         • <strong>Goal:</strong> Match Target Pattern at step <span id="manualMaxStepsLabel">12</span> (See 'Steps' settings in Evolve mode)<br>
-                        • <strong>Actions:</strong><br>
+                        • <strong>Actions (Keyboard):</strong><br>
                         • <strong>4 Arrow Keys:</strong> Move 2x2 write window Up, Down, Left, Right<br>
                         • <strong>1 Space Bar:</strong> Pass<br>
                         • <strong>16 Hex Keys(0-9 & A-F):</strong> Write a 2×2 pattern<br>
+                        • <strong>Actions (Mouse):</strong> Use the "Actions" panel above.<br>
                         • <strong>Update Rule:</strong> An action (move/pass/write) is always preceded by a GoL update step.<br>
                         • <strong>Reset Game:</strong> Use the Reset Game button to play again. <br>
                         • <strong>Save Game State as Target Pattern:</strong> Save the current game state as the new target pattern using this button (Or modify the target pattern directly).
@@ -348,6 +408,7 @@
                         <button id="demoResetBtn">Reset</button>
                     </div>
                 </div>
+                <!-- --- Action Panel REMOVED from Demo Mode --- -->
                 <div class="card canvas-grid">
                     <div>
                         <div class="pattern-label">Target Pattern</div>
@@ -364,7 +425,7 @@
                     </div>
                 </div>
                 <div class="card">
-                    <div class="pattern-label">Action Sequence</div>
+                    <div class="pattern-label">Best Action Sequence Evolved</div>
                     <div id="demoActionsCanvas"></div>
                 </div>
             </div>
@@ -379,3 +440,4 @@
 
 </body>
 </html>
+

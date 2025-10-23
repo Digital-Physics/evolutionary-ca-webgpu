@@ -34,6 +34,7 @@ type UIElements = {
   fitnessDistCanvas: HTMLCanvasElement;
   diversityCanvas: HTMLCanvasElement;
   top5List: HTMLElement;
+  manualActionsPanel: HTMLElement;
 };
 
 type TopSequence = {
@@ -57,6 +58,14 @@ const ACTION_DECODER = ACTIONS.map((name, index) => {
   return { type: name, patBits: [0, 0, 0, 0] as [number, number, number, number], index };
 });
 
+const ACTION_LABELS = ['↑','↓','←','→','∅', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())];
+const ACTION_TYPES = [
+    'Move', 'Move', 'Move', 'Move', 'Pass',
+    'Write', 'Write', 'Write', 'Write', 'Write', 'Write', 'Write', 'Write',
+    'Write', 'Write', 'Write', 'Write', 'Write', 'Write', 'Write', 'Write'
+];
+
+
 // --- GLOBAL STATE ---
 let currentMode: 'evolve' | 'manual' | 'demo' = 'evolve';
 
@@ -68,7 +77,8 @@ let manualAgentX = 5; // Start at (5,5) - upper left of center 2x2
 let manualAgentY = 5;
 
 // Shared state between modes
-let sharedTargetPattern: Uint8Array | null = null;
+// UPDATED for Task 3: Initialize with an empty array
+let sharedTargetPattern: Uint8Array | null = new Uint8Array(GRID_SIZE * GRID_SIZE);
 
 // Evolve Mode State
 let isRunning = false;
@@ -369,6 +379,7 @@ function getUIElements(): UIElements {
     fitnessDistCanvas: document.getElementById('fitnessDistCanvas') as HTMLCanvasElement,
     diversityCanvas: document.getElementById('diversityCanvas') as HTMLCanvasElement,
     top5List: document.getElementById('top5List') as HTMLElement,
+    manualActionsPanel: document.getElementById('manualActionsPanel') as HTMLElement, 
   };
 }
 
@@ -383,10 +394,12 @@ function handleModeChange() {
   const ui = getUIElements();
   if (currentMode === 'manual') {
     renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
+    generateActionButtons(ui.manualActionsPanel, performManualAction); 
     updateManualDisplay();
   } else if (currentMode === 'evolve') {
     renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#c53030');
   } else if (currentMode === 'demo') {
+    // initializeDemoMode calls generateActionButtons
     initializeDemoMode();
   }
 }
@@ -452,19 +465,38 @@ function initManualMode(ui: UIElements) {
         log(ui.log, 'Manual mode reset.');
     });
     
+    // generateActionButtons(ui.manualActionsPanel, performManualAction); // Moved to handleModeChange
     updateManualDisplay();
 }
 
-function handleManualKeyDown(e: KeyboardEvent) {
-    if (currentMode !== 'manual') return;
-    
+// REFACTORED for Task 1
+function performManualAction(actionIndex: number) {
     const ui = getUIElements();
     const maxSteps = Number(ui.steps.value);
     
-    if (manualStep >= maxSteps) return;
+    if (manualStep >= maxSteps) {
+        log(ui.log, 'Max steps reached. Reset to perform new actions.');
+        return; // Already at max steps
+    }
+
+    if (actionIndex !== -1) {
+        const agentPos = { x: manualAgentX, y: manualAgentY };
+        
+        manualDemoState = new Uint8Array(conwayStep(manualDemoState));
+        manualDemoState = new Uint8Array(applyAction(manualDemoState, actionIndex, agentPos));
+        
+        manualAgentX = agentPos.x;
+        manualAgentY = agentPos.y;
+        manualStep++;
+        updateManualDisplay();
+    }
+}
+
+// UPDATED for Task 1
+function handleManualKeyDown(e: KeyboardEvent) {
+    if (currentMode !== 'manual') return;
 
     const key = e.key.toLowerCase();
-    let actionTaken = false;
     let actionIndex = -1;
 
     if (key.startsWith('arrow')) {
@@ -478,19 +510,7 @@ function handleManualKeyDown(e: KeyboardEvent) {
 
     if (actionIndex !== -1) {
         e.preventDefault();
-        const agentPos = { x: manualAgentX, y: manualAgentY };
-        
-        manualDemoState = new Uint8Array(conwayStep(manualDemoState));
-        manualDemoState = new Uint8Array(applyAction(manualDemoState, actionIndex, agentPos));
-        
-        manualAgentX = agentPos.x;
-        manualAgentY = agentPos.y;
-        manualStep++;
-        actionTaken = true;
-    }
-
-    if (actionTaken) {
-        updateManualDisplay();
+        performManualAction(actionIndex); // Call the refactored function
     }
 }
 
@@ -640,21 +660,10 @@ async function runEvolution(ui: UIElements) {
     const fitnessArray = Array.from(new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0)));
     fitnessReadBuffer.unmap();
 
-    // DEBUG: Log raw fitness values before conversion
-    if (gen % 10 === 0) {
-      console.log(`Gen ${gen} - Raw fitness (first 5):`, fitnessArray.slice(0, 5).map(f => f.toFixed(2)));
-    }
-
     // Convert raw match counts to percentages
     const stateSize = GRID_SIZE * GRID_SIZE;
     for (let i = 0; i < batchSize; i++) {
         fitnessArray[i] = (fitnessArray[i] / stateSize) * 100;
-    }
-
-    // DEBUG: Log converted fitness values
-    if (gen % 10 === 0) {
-      console.log(fitnessArray[0]); 
-      console.log(`Gen ${gen} - Converted fitness % (first 5):`, Array.from(fitnessArray.slice(0, 5)).map(f => f.toFixed(2)));
     }
 
     let maxFit = 0;
@@ -668,11 +677,6 @@ async function runEvolution(ui: UIElements) {
         }
     }
     const avgFitness = sumFitness / batchSize;
-
-    // DEBUG: Log best of this generation
-    if (gen % 10 === 0) {
-      console.log(`Gen ${gen} - Max fitness this gen: ${maxFit.toFixed(2)}%, Avg: ${avgFitness.toFixed(2)}%`);
-    }
 
     if (maxFit > bestFitness) {
       bestFitness = maxFit;
@@ -808,12 +812,13 @@ function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color
     const { width, height } = canvas;
     const p = { t: 30, r: 20, b: 40, l: 50 };
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.font = '12px sans-serif';
-
+    // *** BUG FIX: Declarations moved up ***
     const xRange = width - p.l - p.r;
     const yRange = height - p.t - p.b;
     const numPoints = datasets[0].data.length;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.font = '12px sans-serif';
 
     ctx.strokeStyle = '#e2e8f0';
     ctx.fillStyle = '#718096';
@@ -869,6 +874,8 @@ function renderDiversityChart(canvas: HTMLCanvasElement, diversity: number[]) {
 }
 
 // --- DEMO MODE ---
+
+// This function is now used by Demo Mode and Manual Mode (Task 1)
 function createActionImage(actionIndex: number, size: number = 40): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -962,6 +969,40 @@ function createActionImage(actionIndex: number, size: number = 40): HTMLCanvasEl
   return canvas;
 }
 
+// Generates the 21 action buttons for Manual mode
+function generateActionButtons(container: HTMLElement, clickHandler?: (actionIndex: number) => void) {
+    container.innerHTML = ''; // Clear previous
+    
+    for (let i = 0; i < ACTIONS.length; i++) {
+        const actionIndex = i;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'action-btn-wrapper';
+        
+        // Add click handler if provided (for Manual Mode)
+        if (clickHandler) {
+            wrapper.classList.add('clickable');
+            wrapper.addEventListener('click', () => clickHandler(actionIndex));
+        }
+
+        const canvas = createActionImage(actionIndex, 40); // Use existing function
+        wrapper.appendChild(canvas);
+
+        const label = document.createElement('div');
+        label.textContent = ACTION_LABELS[actionIndex];
+        label.className = 'action-btn-label';
+        wrapper.appendChild(label);
+
+        const typeLabel = document.createElement('div');
+        typeLabel.textContent = ACTION_TYPES[actionIndex];
+        typeLabel.className = 'action-btn-type';
+        wrapper.appendChild(typeLabel);
+
+        container.appendChild(wrapper);
+    }
+}
+
+
 function updateDemoDisplay(ui: UIElements) {
   renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#c53030');
 
@@ -988,7 +1029,7 @@ function updateDemoDisplay(ui: UIElements) {
     container.style.border = '1px solid #e2e8f0';
     container.style.borderRadius = '0.375rem';
 
-    const actionLabels = ['↑','↓','←','→','Space', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())];
+    // const actionLabels = ['↑','↓','←','→','Space', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())]; // Moved to global constants
 
     for (let i = 0; i < bestSequence.length; i++) {
       const wrapper = document.createElement('div');
@@ -1007,7 +1048,7 @@ function updateDemoDisplay(ui: UIElements) {
       wrapper.appendChild(canvas);
 
       const label = document.createElement('div');
-      label.textContent = actionLabels[bestSequence[i]];
+      label.textContent = ACTION_LABELS[bestSequence[i]];
       label.style.fontSize = '10px';
       label.style.fontWeight = '600';
       label.style.color = '#2d3748';
@@ -1062,6 +1103,7 @@ function resetDemo(ui: UIElements) {
 
 function initializeDemoMode() {
   const ui = getUIElements();
+  
   if (!sharedTargetPattern || !bestSequence) {
     log(ui.log, 'No data for demo. Run Evolve Mode first to generate a sequence.');
     demoPlaybackState = new Uint8Array(GRID_SIZE*GRID_SIZE);
@@ -1090,6 +1132,23 @@ function initializeDemoMode() {
 
 // --- APP INITIALIZATION ---
 function initApp() {
+  // --- TASK 3: Initialize Target Pattern ---
+  if (sharedTargetPattern) { // It's initialized now, just fill it
+      const patternIndices = [
+          (4*GRID_SIZE + 4), (4*GRID_SIZE + 5), // Top 2x2
+          (5*GRID_SIZE + 4), (5*GRID_SIZE + 5),
+          
+          (5*GRID_SIZE + 5), (5*GRID_SIZE + 6), // Bottom-right 2x2 (overlapping at 5,5)
+          (6*GRID_SIZE + 5), (6*GRID_SIZE + 6)
+      ];
+      // Use a Set to handle the overlap gracefully
+      const uniqueIndices = new Set(patternIndices);
+      for (const idx of uniqueIndices) {
+          sharedTargetPattern[idx] = 1;
+      }
+  }
+  // --- End Task 3 ---
+
   const ui = getUIElements();
 
   document.querySelectorAll('.mode-btn').forEach(btn => {
@@ -1139,8 +1198,9 @@ function initApp() {
   ui.demoTargetCanvas.addEventListener('click', targetClickHandler);
 
   initManualMode(ui);
-  handleModeChange();
-  log(ui.log, 'App ready. Draw a target pattern, then start evolution.');
+  handleModeChange(); // This will render the initial pattern
+  log(ui.log, "App ready. Default target pattern loaded. Press 'Start Evolution' or go to Manual mode.");
+  log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader)');
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
