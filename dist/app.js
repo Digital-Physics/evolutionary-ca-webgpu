@@ -45,6 +45,7 @@ let pipeline = null;
 let avgFitnessHistory = [];
 let allTimeBestFitnessHistory = [];
 let diversityHistory = [];
+let uniqueSequencesSeen = new Set();
 // --- COMPUTE SHADER (WGSL) ---
 const computeShaderWGSL = `
 struct Params {
@@ -354,7 +355,7 @@ function updateManualDisplay() {
     let statsHTML = `
     Step: <strong>${manualStep}/${maxSteps}</strong><br>
     Write Pattern Window: <strong>(${manualAgentX}, ${manualAgentY})</strong><br>
-    Pattern Match %: <strong>${matchPercent.toFixed(1)}%</strong>
+    Temporary Pattern Match: <strong>${matchPercent.toFixed(1)}%</strong>
   `;
     if (manualStep >= maxSteps) {
         statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
@@ -479,7 +480,7 @@ function formatSequence(seq, maxLen = 12) {
 }
 function updateTop5Display(ui) {
     let html = '<div style="font-family: monospace; font-size: 0.75rem; line-height: 1.4;">';
-    html += '<strong>TOP 5 SEQUENCES across all generations</strong><br>';
+    html += '<strong>All-Gen. Leaderboard</strong><br>';
     html += '═══════════════════════<br>';
     if (top5Sequences.length === 0) {
         html += 'No sequences yet<br>';
@@ -546,6 +547,8 @@ async function runEvolution(ui) {
     diversityHistory = [];
     top5Sequences = [];
     currentGeneration = 0;
+    uniqueSequencesSeen = new Set();
+    const totalPossibleSequences = Math.pow(ACTIONS.length, steps);
     for (let gen = 0; gen < generations && isRunning; gen++) {
         currentGeneration = gen;
         device.queue.writeBuffer(inputSequencesBuffer, 0, populationSequences);
@@ -615,17 +618,25 @@ async function runEvolution(ui) {
         top5Sequences = top5Sequences.slice(0, 5);
         const seqSet = new Set();
         for (let i = 0; i < batchSize; i++) {
-            seqSet.add(populationSequences.slice(i * steps, (i + 1) * steps).join(','));
+            // seqSet.add(populationSequences.slice(i * steps, (i + 1) * steps).join(','));
+            const seqStr = populationSequences.slice(i * steps, (i + 1) * steps).join(',');
+            seqSet.add(seqStr);
+            uniqueSequencesSeen.add(seqStr);
         }
         diversityHistory.push(seqSet.size / batchSize);
         avgFitnessHistory.push(avgFitness);
         allTimeBestFitnessHistory.push(bestFitness);
         if (gen % vizFreq === 0 || gen === generations - 1 || bestFitness === 100) {
             const bestSeqStr = bestSequence ? formatSequence(bestSequence, 20) : 'N/A';
+            const explorationPercent = (uniqueSequencesSeen.size / totalPossibleSequences) * 100;
             ui.statsDiv.innerHTML = `
         Gen: <strong>${gen} / ${generations}</strong><br>
-        Best Fitness: <strong>${bestFitness}%</strong><br>
+        Best Fitness: <strong>${bestFitness.toFixed(1)}%</strong><br>
         Avg Fitness: <strong>${avgFitness.toFixed(1)}%</strong><br>
+        <hr style="margin: 4px 0; border-top: 1px solid #e2e8f0;">
+        Unique Sequences Seen: <strong>${uniqueSequencesSeen.size.toLocaleString()}</strong><br>
+        Total Possible Action Seq. (actions^steps): <strong>${totalPossibleSequences.toLocaleString()}</strong><br>
+        Explored: <strong>${explorationPercent.toFixed(12)}%</strong><br>
         <hr style="margin: 4px 0; border-top: 1px solid #e2e8f0;">
         Best Sequence: <small>${bestSeqStr}</small>
       `;
@@ -847,7 +858,7 @@ function updateDemoDisplay(ui) {
         renderGrid(ui.demoBestCanvas, demoPlaybackState, '#4299e1', true, demoAgentX, demoAgentY);
         const matchPercent = calculateMatchPercentage(demoPlaybackState, sharedTargetPattern);
         let statsHTML = `Playback (Step: ${demoPlaybackStep}/${bestSequence.length})<br>
-                     Pattern Match %: <strong>${matchPercent.toFixed(1)}%</strong>`;
+                     Temporary Pattern Match: <strong>${matchPercent.toFixed(1)}%</strong>`;
         if (demoPlaybackStep >= bestSequence.length) {
             statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
         }
