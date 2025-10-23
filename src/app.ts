@@ -1,8 +1,10 @@
 // src/app.ts
-// WebGPU CA compute + GPU fitness + genetic algorithm
+// transpiled to dist/app.js
+// Evolutionary Algorithms for a cellular automaton game
+// WebGPU Game of Life simulation & fitness calculations
 // Modes: manual, evolve, demo
 
-// --- TYPE DEFINITIONS ---
+// TYPE DEFINITIONS  
 type UIElements = {
   population: HTMLInputElement;
   steps: HTMLInputElement;
@@ -22,7 +24,7 @@ type UIElements = {
   demoTargetCanvas: HTMLCanvasElement;
   demoBestCanvas: HTMLCanvasElement;
   demoActionsCanvas: HTMLElement;
-  demoPlaybackLabel: HTMLElement; // Replaces demoStep and demoMaxSteps
+  demoPlaybackLabel: HTMLElement; 
   demoPlayBtn: HTMLButtonElement;
   demoPauseBtn: HTMLButtonElement;
   demoResetBtn: HTMLButtonElement;
@@ -43,7 +45,7 @@ type TopSequence = {
   generation: number;
 };
 
-// --- CONSTANTS AND CONFIGURATION ---
+// CONSTANTS AND CONFIGURATION  
 const GRID_SIZE = 12;
 const ACTIONS = ['up', 'down', 'left', 'right', 'do_nothing', 'write_0000', 'write_0001', 'write_0010', 'write_0011', 'write_0100', 'write_0101', 'write_0110', 'write_0111', 'write_1000', 'write_1001', 'write_1010', 'write_1011', 'write_1100', 'write_1101', 'write_1110', 'write_1111'];
 
@@ -66,7 +68,7 @@ const ACTION_TYPES = [
 ];
 
 
-// --- GLOBAL STATE ---
+// GLOBAL STATE  
 let currentMode: 'evolve' | 'manual' | 'demo' = 'evolve';
 
 // Manual Mode State
@@ -77,7 +79,6 @@ let manualAgentX = 5; // Start at (5,5) - upper left of center 2x2
 let manualAgentY = 5;
 
 // Shared state between modes
-// UPDATED for Task 3: Initialize with an empty array
 let sharedTargetPattern: Uint8Array | null = new Uint8Array(GRID_SIZE * GRID_SIZE);
 
 // Evolve Mode State
@@ -104,8 +105,9 @@ let avgFitnessHistory: number[] = [];
 let allTimeBestFitnessHistory: number[] = [];
 let diversityHistory: number[] = [];
 let uniqueSequencesSeen: Set<string> = new Set();
+let countAtFirstPerfectMatch = "N/A";
 
-// --- COMPUTE SHADER (WGSL) ---
+// COMPUTE SHADER (WGSL)  
 const computeShaderWGSL = `
 struct Params {
   gridSize: u32,
@@ -242,7 +244,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 }
 `;
 
-// --- CPU-SIDE SIMULATION (for Manual/Demo modes) ---
+// CPU-SIDE SIMULATION (for Manual/Demo modes)  
 function conwayStep(grid: Uint8Array): Uint8Array {
   const size = Math.sqrt(grid.length);
   const nextGrid = new Uint8Array(grid.length);
@@ -303,7 +305,7 @@ function evaluateSequenceToGrid(seq: Uint32Array | null): Uint8Array | null {
     return state;
 }
 
-// --- NEW HELPER FOR STATS ---
+// HELPER FOR STATS  
 function calculateMatchPercentage(gridA: Uint8Array, gridB: Uint8Array | null): number {
     if (!gridB) return 0;
     const size = GRID_SIZE * GRID_SIZE;
@@ -318,7 +320,7 @@ function calculateMatchPercentage(gridA: Uint8Array, gridB: Uint8Array | null): 
 }
 
 
-// --- RENDERING ---
+// RENDERING  
 function renderGrid(canvas: HTMLCanvasElement, grid: Uint8Array | null, cellColor: string = '#4299e1', showAgent: boolean = false, agentX: number = 0, agentY: number = 0) {
   const size = GRID_SIZE;
   const ctx = canvas.getContext('2d');
@@ -383,7 +385,7 @@ function getUIElements(): UIElements {
   };
 }
 
-// --- MODE HANDLING ---
+// MODE HANDLING  
 function handleModeChange() {
   document.querySelectorAll('.mode-content').forEach(el => (el as HTMLElement).style.display = 'none');
   const selectedModeEl = document.getElementById(`${currentMode}-mode`);
@@ -393,23 +395,23 @@ function handleModeChange() {
 
   const ui = getUIElements();
   if (currentMode === 'manual') {
-    renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
+    renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#187537ff');
     generateActionButtons(ui.manualActionsPanel, performManualAction); 
     updateManualDisplay();
   } else if (currentMode === 'evolve') {
-    renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#c53030');
+    renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#d6851bff');
   } else if (currentMode === 'demo') {
     // initializeDemoMode calls generateActionButtons
     initializeDemoMode();
   }
 }
 
-// --- MANUAL MODE ---
+// MANUAL MODE  
 function updateManualDisplay() {
   const ui = getUIElements();
   const maxSteps = Number(ui.steps.value);
   renderGrid(ui.manualDemoCanvas, manualDemoState, '#4299e1', true, manualAgentX, manualAgentY);
-  renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
+  renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c2862eff');
   
   const matchPercent = calculateMatchPercentage(manualDemoState, sharedTargetPattern);
   
@@ -444,7 +446,7 @@ function initManualMode(ui: UIElements) {
             const idx = y * GRID_SIZE + x;
             if (!sharedTargetPattern) sharedTargetPattern = new Uint8Array(GRID_SIZE * GRID_SIZE);
             sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
-            renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#c53030');
+            renderGrid(ui.manualTargetCanvas, sharedTargetPattern, '#d6851bff');
             updateManualDisplay();
         }
     };
@@ -469,7 +471,6 @@ function initManualMode(ui: UIElements) {
     updateManualDisplay();
 }
 
-// REFACTORED for Task 1
 function performManualAction(actionIndex: number) {
     const ui = getUIElements();
     const maxSteps = Number(ui.steps.value);
@@ -492,7 +493,6 @@ function performManualAction(actionIndex: number) {
     }
 }
 
-// UPDATED for Task 1
 function handleManualKeyDown(e: KeyboardEvent) {
     if (currentMode !== 'manual') return;
 
@@ -514,14 +514,14 @@ function handleManualKeyDown(e: KeyboardEvent) {
     }
 }
 
-// --- LOGGING ---
+// LOGGING  
 function log(el: HTMLElement | null, ...args: any[]) {
   if (!el) return;
   el.textContent += args.join(' ') + '\n';
   el.scrollTop = el.scrollHeight;
 }
 
-// --- WEBGPU SETUP ---
+// WEBGPU SETUP  
 async function initWebGPU(): Promise<GPUDevice> {
   if (gpuDevice) return gpuDevice;
   if (!navigator.gpu) throw new Error('WebGPU not supported on this browser.');
@@ -576,7 +576,7 @@ function updateTop5Display(ui: UIElements) {
   ui.top5List.innerHTML = html;
 }
 
-// --- EVOLUTION MODE ---
+// EVOLUTION MODE  
 async function runEvolution(ui: UIElements) {
   if (!sharedTargetPattern || sharedTargetPattern.every(cell => cell === 0)) {
     log(ui.log, 'ERROR: No target pattern set. Please draw a pattern on the target canvas first.');
@@ -656,7 +656,6 @@ async function runEvolution(ui: UIElements) {
     device.queue.submit([commandEncoder.finish()]);
 
     await fitnessReadBuffer.mapAsync(GPUMapMode.READ);
-    // const fitnessArray = new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0));
     const fitnessArray = Array.from(new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0)));
     fitnessReadBuffer.unmap();
 
@@ -669,6 +668,7 @@ async function runEvolution(ui: UIElements) {
     let maxFit = 0;
     let maxIdx = -1;
     let sumFitness = 0;
+
     for (let i = 0; i < batchSize; i++) {
         sumFitness += fitnessArray[i];
         if (fitnessArray[i] > maxFit) {
@@ -679,6 +679,7 @@ async function runEvolution(ui: UIElements) {
     const avgFitness = sumFitness / batchSize;
 
     if (maxFit > bestFitness) {
+      countAtFirstPerfectMatch = maxFit === 100? uniqueSequencesSeen.size.toLocaleString(): 'N/A';
       bestFitness = maxFit;
       bestSequence = populationSequences.slice(maxIdx * steps, (maxIdx + 1) * steps);
       log(ui.log, `Gen ${gen}: New best fitness ${bestFitness}%`);
@@ -708,7 +709,6 @@ async function runEvolution(ui: UIElements) {
     
     const seqSet = new Set();
     for(let i = 0; i < batchSize; i++) {
-        // seqSet.add(populationSequences.slice(i * steps, (i + 1) * steps).join(','));
         const seqStr = populationSequences.slice(i * steps, (i + 1) * steps).join(',');
         seqSet.add(seqStr);
         uniqueSequencesSeen.add(seqStr);
@@ -726,14 +726,15 @@ async function runEvolution(ui: UIElements) {
         Best Fitness: <strong>${bestFitness.toFixed(1)}%</strong><br>
         Avg Fitness: <strong>${avgFitness.toFixed(1)}%</strong><br>
         <hr style="margin: 4px 0; border-top: 1px solid #e2e8f0;">
-        Unique Sequences Seen: <strong>${uniqueSequencesSeen.size.toLocaleString()}</strong><br>
-        Total Possible Action Seq. (actions^steps): <strong>${totalPossibleSequences.toLocaleString()}</strong><br>
-        Explored: <strong>${explorationPercent.toFixed(12)}%</strong><br>
+        Unique Action Sequences Analyzed: <strong>${uniqueSequencesSeen.size.toLocaleString()}</strong><br>
+        Total Possible Action Seq. (actions^steps):<br><strong>${totalPossibleSequences.toLocaleString()}</strong><br>
+        Percentage Explored: <strong>${explorationPercent.toFixed(12)}%</strong><br>
+        Unique Sequences Before Exact Match: <strong>${countAtFirstPerfectMatch}</strong><br>
         <hr style="margin: 4px 0; border-top: 1px solid #e2e8f0;">
         Best Sequence: <small>${bestSeqStr}</small>
       `;
       renderGrid(ui.evolveBestCanvas, evaluateSequenceToGrid(bestSequence), '#38a169');
-      renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#c53030');
+      renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#d6851bff');
       
       const randomIdx = Math.floor(Math.random() * batchSize);
       const randomSeq = populationSequences.slice(randomIdx * steps, (randomIdx + 1) * steps);
@@ -748,7 +749,7 @@ async function runEvolution(ui: UIElements) {
 
     if (bestFitness === 100) {
       log(ui.log, `Perfect match found in generation ${gen}!`);
-      // break;
+      // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution
     }
 
     const newPopulation = new Uint32Array(batchSize * steps);
@@ -797,12 +798,12 @@ async function runEvolution(ui: UIElements) {
   log(ui.log, 'Evolution complete.');
 }
 
-// --- CHART RENDERING ---
+// CHART RENDERING  
 function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color: string, label: string}[], yLabel: string, xLabel: string, yMax: number) {
     const ctx = canvas.getContext('2d');
     if (!ctx || datasets.length === 0 || datasets[0].data.length === 0) return;
     
-    // --- FIX: Resizing canvas drawing buffer to match display size to prevent stretching ---
+    // FIX: Resizing canvas drawing buffer to match display size to prevent stretching  
     const rect = canvas.getBoundingClientRect();
     if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
@@ -873,7 +874,7 @@ function renderDiversityChart(canvas: HTMLCanvasElement, diversity: number[]) {
     ], 'Diversity Ratio', 'Generation', 1);
 }
 
-// --- DEMO MODE ---
+// DEMO MODE  
 
 // This function is now used by Demo Mode and Manual Mode (Task 1)
 function createActionImage(actionIndex: number, size: number = 40): HTMLCanvasElement {
@@ -1004,17 +1005,19 @@ function generateActionButtons(container: HTMLElement, clickHandler?: (actionInd
 
 
 function updateDemoDisplay(ui: UIElements) {
-  renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#c53030');
+  renderGrid(ui.demoTargetCanvas, sharedTargetPattern, '#d6851bff');
 
   if (demoPlaybackState && bestSequence) {
     renderGrid(ui.demoBestCanvas, demoPlaybackState, '#4299e1', true, demoAgentX, demoAgentY);
     
     const matchPercent = calculateMatchPercentage(demoPlaybackState, sharedTargetPattern);
-    let statsHTML = `Playback (Step: ${demoPlaybackStep}/${bestSequence.length})<br>
+    let statsHTML = `Playback (Step: <strong>${demoPlaybackStep}/${bestSequence.length}</strong>)<br>
                      Temporary Pattern Match: <strong>${matchPercent.toFixed(1)}%</strong>`;
 
     if (demoPlaybackStep >= bestSequence.length) {
-        statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
+      statsHTML += `<br>Final Fitness Score: <strong>${matchPercent.toFixed(1)}%</strong>`;
+    } else {
+      statsHTML += `<br>Final Fitness Score: <strong>N/A</strong>`;
     }
     ui.demoPlaybackLabel.innerHTML = statsHTML;
 
@@ -1130,9 +1133,9 @@ function initializeDemoMode() {
   resetDemo(ui);
 }
 
-// --- APP INITIALIZATION ---
+// APP INITIALIZATION  
 function initApp() {
-  // --- TASK 3: Initialize Target Pattern ---
+  // TASK 3: Initialize Target Pattern  
   if (sharedTargetPattern) { // It's initialized now, just fill it
       const patternIndices = [
           (4*GRID_SIZE + 4), (4*GRID_SIZE + 5), // Top 2x2
@@ -1147,7 +1150,7 @@ function initApp() {
           sharedTargetPattern[idx] = 1;
       }
   }
-  // --- End Task 3 ---
+  // End Task 3  
 
   const ui = getUIElements();
 
@@ -1191,7 +1194,7 @@ function initApp() {
     if (x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
       const idx = y * GRID_SIZE + x;
       sharedTargetPattern[idx] = 1 - sharedTargetPattern[idx];
-      renderGrid(canvas, sharedTargetPattern, '#c53030');
+      renderGrid(canvas, sharedTargetPattern, '#d6851bff');
     }
   };
   ui.targetVizCanvas.addEventListener('click', targetClickHandler);
