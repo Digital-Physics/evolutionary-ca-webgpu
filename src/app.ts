@@ -1202,7 +1202,7 @@ function initApp() {
   initManualMode(ui);
   handleModeChange(); // This will render the initial pattern
   log(ui.log, "App ready. Default target pattern loaded. Press 'Start Evolution' or go to Manual mode.");
-  log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader)');
+  log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader. Make sure your browser is WebGPU-compatible and enabled.');
 }
 
 window.addEventListener('DOMContentLoaded', initApp);

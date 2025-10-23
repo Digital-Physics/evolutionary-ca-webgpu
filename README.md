@@ -4,13 +4,13 @@ This is a Python-to-TypeScript-and-WepGPU port of a cellular automaton game that
 
 There is a WebGPU compute shader that evaluates action sequences.
 
-This parrallelization of the evolutionary process will be compared with regular web workers, which will most likely be the architecture chosen for the final www.nets-vs-automata.net/rl.html website-integrated verion of this project.  
+This parrallelization of the evolutionary process will be compared with regular web workers, which will most likely be the architecture chosen for the final https://www.nets-vs-automata.net/rl.html website-integrated verion of this project.  
 
 Here's the stand-alone WebGPU website. 
 
 Make sure to have WebGPU options turned on and your in a compatible browser.
 
-evolutionary-ca-webgpu.onrender.com
+https://evolutionary-ca-webgpu.onrender.com
 
 #
 
