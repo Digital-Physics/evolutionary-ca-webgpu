@@ -567,7 +567,7 @@ function updateTop5Display(ui: UIElements) {
   } else {
     top5Sequences.forEach((entry, idx) => {
       const seqStr = formatSequence(entry.sequence, 12);
-      html += `#${idx + 1}: ${entry.fitness.toFixed(2)}% (Gen ${entry.generation})<br>`;
+      html += `#${idx + 1}: ${entry.fitness.toFixed(1)}% (Gen. ${entry.generation})<br>`;
       html += `&nbsp;&nbsp;&nbsp;${seqStr}<br>`;
     });
   }
@@ -813,7 +813,6 @@ function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color
     const { width, height } = canvas;
     const p = { t: 30, r: 20, b: 40, l: 50 };
 
-    // *** BUG FIX: Declarations moved up ***
     const xRange = width - p.l - p.r;
     const yRange = height - p.t - p.b;
     const numPoints = datasets[0].data.length;
