@@ -242,7 +242,7 @@
                </div>
 
                <div class="card">
-                  <div class="pattern-label">Top 5 Sequences</div>
+                  <div class="pattern-label">Best Action Sequences</div>
                   <div id="top5List" style="max-height: 200px; overflow-y: auto;">
                   No sequences yet
               </div>
@@ -262,7 +262,7 @@
 
         <div class="right-panel">
           <div class="card">
-            <div class="pattern-label">Controls</div>
+            <div class="pattern-label">Evolutionary Algorithm Controls</div>
             <div class="controls">
               <button id="startBtn">Start Evolution</button>
               <button id="stopBtn" disabled>Stop Evolution</button>
@@ -296,6 +296,13 @@
     <div class="mode-content" id="manual-mode">
         <div class="container">
             <div class="left-panel">
+                <div class="card">
+                    <div class="pattern-label">Game Play Controls</div>
+                    <div class="controls">
+                        <button id="savePatternBtn">Save Game State as Target Pattern</button>
+                        <button id="manualResetBtn">Reset Game</button>
+                    </div>
+                </div>
                 <div class="card canvas-grid">
                     <div>
                         <div class="pattern-label">Game Board</div>
@@ -304,6 +311,11 @@
                     <div>
                         <div class="pattern-label">Target Pattern</div>
                         <canvas id="manualTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                    <div class="card">
+                        <div class="pattern-label">Current Stats</div>
+                        <div class="stats-box" id="manualStats">
+                        </div>
                     </div>
                 </div>
                 <div class="card">
@@ -320,20 +332,6 @@
                     </div>
                 </div>
             </div>
-            <div class="right-panel">
-                <div class="card">
-                    <div class="pattern-label">Controls</div>
-                    <div class="controls">
-                        <button id="savePatternBtn">Save Game State as Target Pattern</button>
-                        <button id="manualResetBtn">Reset Game</button>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="pattern-label">Current Stats</div>
-                    <div class="stats-box" id="manualStats">
-                    </div>
-                </div>
-            </div>
         </div>
     </div>
 
@@ -341,23 +339,6 @@
     <div class="mode-content" id="demo-mode">
         <div class="container">
             <div class="left-panel">
-                <div class="card canvas-grid">
-                    <div>
-                        <div class="pattern-label">Target Pattern</div>
-                        <canvas id="demoTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-                    </div>
-                    <div>
-                        <!-- CHANGE: Replaced spans with a single div for easier stats update -->
-                        <div class="pattern-label" id="demoPlaybackLabel">Playback</div>
-                        <canvas id="demoBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
-                    </div>
-                </div>
-                <div class="card">
-                    <div class="pattern-label">Action Sequence</div>
-                    <div id="demoActionsCanvas"></div>
-                </div>
-            </div>
-            <div class="right-panel">
                 <div class="card">
                     <div class="pattern-label">Playback Controls</div>
                     <div class="controls">
@@ -366,6 +347,25 @@
                         <button id="demoStepBtn">Step</button>
                         <button id="demoResetBtn">Reset</button>
                     </div>
+                </div>
+                <div class="card canvas-grid">
+                    <div>
+                        <div class="pattern-label">Target Pattern</div>
+                        <canvas id="demoTargetCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                    <div>
+                        <div class="pattern-label">Playback</div>
+                        <canvas id="demoBestCanvas" class="pattern-canvas" width="240" height="240"></canvas>
+                    </div>
+                    <div class="card">
+                        <div class="pattern-label">Demo Stats</div>
+                        <div class="stats-box" id="demoPlaybackLabel">
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="pattern-label">Action Sequence</div>
+                    <div id="demoActionsCanvas"></div>
                 </div>
             </div>
         </div>

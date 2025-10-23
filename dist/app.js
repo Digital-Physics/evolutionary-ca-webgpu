@@ -70,9 +70,9 @@ fn wrap_add(a: i32, b: i32, m: i32) -> i32 {
   return v;
 }
 
-fn apply_action_move(state: ptr<function, array<u32, 144>>, action_index: u32) {
-  var ax = (*state)[140u];
-  var ay = (*state)[141u];
+fn apply_action_move(state: ptr<function, array<u32, 146>>, action_index: u32) {
+  var ax = (*state)[144u];
+  var ay = (*state)[145u];
   let grid_size = params.gridSize;
 
   if (action_index == 0u) { ay = (ay + grid_size - 1u) % grid_size; }
@@ -80,14 +80,14 @@ fn apply_action_move(state: ptr<function, array<u32, 144>>, action_index: u32) {
   else if (action_index == 2u) { ax = (ax + grid_size - 1u) % grid_size; }
   else if (action_index == 3u) { ax = (ax + 1u) % grid_size; }
   
-  (*state)[140u] = ax;
-  (*state)[141u] = ay;
+  (*state)[144u] = ax;
+  (*state)[145u] = ay;
 }
 
-fn apply_action_write(state: ptr<function, array<u32, 144>>, action_index: u32) {
+fn apply_action_write(state: ptr<function, array<u32, 146>>, action_index: u32) {
   let pat = action_index - 5u;
-  let ax = (*state)[140u];
-  let ay = (*state)[141u];
+  let ax = (*state)[144u];
+  let ay = (*state)[145u];
   let grid_size_i32 = i32(params.gridSize);
 
   for (var i: i32 = 0; i < 2; i = i + 1) {
@@ -102,8 +102,8 @@ fn apply_action_write(state: ptr<function, array<u32, 144>>, action_index: u32) 
   }
 }
 
-fn conway_step(state: ptr<function, array<u32, 144>>) {
-  var next_state: array<u32, 144>;
+fn conway_step(state: ptr<function, array<u32, 146>>) {
+  var next_state: array<u32, 146>;
   let grid_size = params.gridSize;
   let grid_size_i32 = i32(grid_size);
 
@@ -144,12 +144,12 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
   let grid_cell_count = params.gridSize * params.gridSize;
   let state_offset = idx * grid_cell_count;
 
-  var current_state: array<u32, 144>;
+  var current_state: array<u32, 146>;
   for (var i: u32 = 0; i < grid_cell_count; i = i + 1) {
     current_state[i] = inputStates[state_offset + i];
   }
-  current_state[140u] = 5u;
-  current_state[141u] = 5u;
+  current_state[144u] = 5u;
+  current_state[145u] = 5u;
 
   let sequence_offset = idx * params.steps;
   for (var s: u32 = 0; s < params.steps; s = s + 1) {
@@ -173,7 +173,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
   }
 
-  fitness[idx] = (matches * 100u) / grid_cell_count;
+  // FIX: Store raw match count, convert to percentage on CPU
+  fitness[idx] = matches;
   
   for (var i3: u32 = 0; i3 < grid_cell_count; i3 = i3 + 1) {
     outputStates[state_offset + i3] = current_state[i3];
@@ -486,7 +487,7 @@ function updateTop5Display(ui) {
     else {
         top5Sequences.forEach((entry, idx) => {
             const seqStr = formatSequence(entry.sequence, 12);
-            html += `#${idx + 1}: ${entry.fitness.toFixed(1)}% (Gen ${entry.generation})<br>`;
+            html += `#${idx + 1}: ${entry.fitness.toFixed(2)}% (Gen ${entry.generation})<br>`;
             html += `&nbsp;&nbsp;&nbsp;${seqStr}<br>`;
         });
     }
@@ -557,8 +558,23 @@ async function runEvolution(ui) {
         commandEncoder.copyBufferToBuffer(fitnessBuffer, 0, fitnessReadBuffer, 0, batchSize * 4);
         device.queue.submit([commandEncoder.finish()]);
         await fitnessReadBuffer.mapAsync(GPUMapMode.READ);
-        const fitnessArray = new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0));
+        // const fitnessArray = new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0));
+        const fitnessArray = Array.from(new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0)));
         fitnessReadBuffer.unmap();
+        // DEBUG: Log raw fitness values before conversion
+        if (gen % 10 === 0) {
+            console.log(`Gen ${gen} - Raw fitness (first 5):`, fitnessArray.slice(0, 5).map(f => f.toFixed(2)));
+        }
+        // Convert raw match counts to percentages
+        const stateSize = GRID_SIZE * GRID_SIZE;
+        for (let i = 0; i < batchSize; i++) {
+            fitnessArray[i] = (fitnessArray[i] / stateSize) * 100;
+        }
+        // DEBUG: Log converted fitness values
+        if (gen % 10 === 0) {
+            console.log(fitnessArray[0]);
+            console.log(`Gen ${gen} - Converted fitness % (first 5):`, Array.from(fitnessArray.slice(0, 5)).map(f => f.toFixed(2)));
+        }
         let maxFit = 0;
         let maxIdx = -1;
         let sumFitness = 0;
@@ -570,6 +586,10 @@ async function runEvolution(ui) {
             }
         }
         const avgFitness = sumFitness / batchSize;
+        // DEBUG: Log best of this generation
+        if (gen % 10 === 0) {
+            console.log(`Gen ${gen} - Max fitness this gen: ${maxFit.toFixed(2)}%, Avg: ${avgFitness.toFixed(2)}%`);
+        }
         if (maxFit > bestFitness) {
             bestFitness = maxFit;
             bestSequence = populationSequences.slice(maxIdx * steps, (maxIdx + 1) * steps);
@@ -621,7 +641,7 @@ async function runEvolution(ui) {
         }
         if (bestFitness === 100) {
             log(ui.log, `Perfect match found in generation ${gen}!`);
-            break;
+            // break;
         }
         const newPopulation = new Uint32Array(batchSize * steps);
         const eliteCount = Math.floor(batchSize * eliteFrac);
@@ -629,14 +649,17 @@ async function runEvolution(ui) {
             const bestIdx = sortedIndices[i];
             newPopulation.set(populationSequences.slice(bestIdx * steps, (bestIdx + 1) * steps), i * steps);
         }
-        // --- FIX: Improved parent selection to prevent evolution stalling ---
         for (let i = eliteCount; i < batchSize; i++) {
-            // Rank-based selection (biased towards better solutions)
-            const r1 = Math.random();
-            const r2 = Math.random();
-            // Squaring the random number biases the selection towards the start of the sorted list (fitter individuals)
-            const parentA_rank = Math.floor(batchSize * r1 * r1);
-            const parentB_rank = Math.floor(batchSize * r2 * r2);
+            // Select two random parents from the elite-only pool
+            // (indices 0 to eliteCount-1 in sortedIndices)
+            let parentA_rank = Math.floor(Math.random() * eliteCount);
+            let parentB_rank = Math.floor(Math.random() * eliteCount);
+            // Ensure distinct parents, matching np.random.choice(..., replace=False)
+            if (eliteCount > 1) {
+                while (parentA_rank === parentB_rank) {
+                    parentB_rank = Math.floor(Math.random() * eliteCount);
+                }
+            }
             const parentA_idx = sortedIndices[parentA_rank];
             const parentB_idx = sortedIndices[parentB_rank];
             const parentA = populationSequences.slice(parentA_idx * steps, (parentA_idx + 1) * steps);
