@@ -6,9 +6,7 @@ There is a WebGPU compute shader that evaluates action sequences.
 
 This parrallelization of the evolutionary process will be compared with regular web workers, which will most likely be the architecture chosen for the final https://www.nets-vs-automata.net/rl.html website-integrated verion of this project.  
 
-Here's the stand-alone WebGPU website. 
-
-Make sure to have WebGPU options turned on and your in a compatible browser.
+Here's the stand-alone WebGPU website. Make sure to have WebGPU options turned on and your in a compatible browser.
 
 https://evolutionary-ca-webgpu.onrender.com
 
