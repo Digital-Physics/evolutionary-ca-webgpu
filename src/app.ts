@@ -235,7 +235,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
   }
 
-  // FIX: Store raw match count, convert to percentage on CPU
+  // Store raw match count, convert to percentage on CPU
   fitness[idx] = matches;
   
   for (var i3: u32 = 0; i3 < grid_cell_count; i3 = i3 + 1) {
@@ -550,7 +550,6 @@ async function setupComputePipeline() {
 }
 
 function formatSequence(seq: Uint32Array, maxLen: number = 12): string {
-  // FIX: Corrected labels to match keyboard input (0-F)
   const labels = ['↑','↓','←','→','∅', ...Array.from({length:16}, (_,i)=>(i).toString(16).toUpperCase())];
   if (seq.length <= maxLen) {
     return Array.from(seq).map(a => labels[a]).join(' ');
@@ -807,7 +806,7 @@ function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color
     const ctx = canvas.getContext('2d');
     if (!ctx || datasets.length === 0 || datasets[0].data.length === 0) return;
     
-    // FIX: Resizing canvas drawing buffer to match display size to prevent stretching  
+    // Resizing canvas drawing buffer to match display size to prevent stretching  
     const rect = canvas.getBoundingClientRect();
     if (canvas.width !== rect.width || canvas.height !== rect.height) {
         canvas.width = rect.width;
@@ -877,9 +876,7 @@ function renderDiversityChart(canvas: HTMLCanvasElement, diversity: number[]) {
     ], 'Diversity Ratio', 'Generation', 1);
 }
 
-// DEMO MODE  
-
-// This function is now used by Demo Mode and Manual Mode (Task 1)
+// DEMO MODE  (should we add this to stats in Evolve mode too?)
 function createActionImage(actionIndex: number, size: number = 40): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = size;
@@ -1014,7 +1011,7 @@ function updateDemoDisplay(ui: UIElements) {
     renderGrid(ui.demoBestCanvas, demoPlaybackState, '#4299e1', true, demoAgentX, demoAgentY);
     
     const matchPercent = calculateMatchPercentage(demoPlaybackState, sharedTargetPattern);
-    let statsHTML = `Playback (Step: <strong>${demoPlaybackStep}/${bestSequence.length}</strong>)<br>
+    let statsHTML = `Playback Step: <strong>${demoPlaybackStep}/${bestSequence.length}</strong><br>
                      Temporary Pattern Match: <strong>${matchPercent.toFixed(1)}%</strong>`;
 
     if (demoPlaybackStep >= bestSequence.length) {
@@ -1134,10 +1131,9 @@ function initializeDemoMode() {
   resetDemo(ui);
 }
 
-// APP INITIALIZATION  
-function initApp() {
-  // TASK 3: Initialize Target Pattern  
-  if (sharedTargetPattern) { // It's initialized now, just fill it
+
+function initApp() { 
+  if (sharedTargetPattern) { 
       const patternIndices = [
           (4*GRID_SIZE + 4), (4*GRID_SIZE + 5), // Top 2x2
           (5*GRID_SIZE + 4), (5*GRID_SIZE + 5),
@@ -1151,7 +1147,6 @@ function initApp() {
           sharedTargetPattern[idx] = 1;
       }
   }
-  // End Task 3  
 
   const ui = getUIElements();
 
