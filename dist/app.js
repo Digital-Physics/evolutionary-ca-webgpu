@@ -55,6 +55,68 @@ let allTimeBestFitnessHistory = [];
 let diversityHistory = [];
 let uniqueSequencesSeen = new Set();
 let countAtFirstPerfectMatch = "N/A";
+class Island {
+    constructor(size, steps, actionsCount) {
+        this.size = size;
+        this.steps = steps;
+        this.sequences = new Uint32Array(size * steps).map(() => Math.floor(Math.random() * actionsCount));
+        this.fitness = new Array(size).fill(0);
+        this.bestFitness = 0;
+        this.bestSequence = null;
+    }
+    updateFitness(fitnessArray, startIdx) {
+        for (let i = 0; i < this.size; i++) {
+            this.fitness[i] = fitnessArray[startIdx + i];
+            if (this.fitness[i] > this.bestFitness) {
+                this.bestFitness = this.fitness[i];
+                this.bestSequence = this.sequences.slice(i * this.steps, (i + 1) * this.steps);
+            }
+        }
+    }
+    getTopSequences(k) {
+        const indices = Array.from({ length: this.size }, (_, i) => i)
+            .sort((a, b) => this.fitness[b] - this.fitness[a])
+            .slice(0, Math.min(k, this.size));
+        return indices.map(idx => ({
+            seq: this.sequences.slice(idx * this.steps, (idx + 1) * this.steps),
+            fit: this.fitness[idx]
+        }));
+    }
+    evolve(mutationRate, eliteFrac, actionsCount) {
+        const eliteCount = Math.floor(this.size * eliteFrac);
+        const sortedIndices = Array.from({ length: this.size }, (_, i) => i)
+            .sort((a, b) => this.fitness[b] - this.fitness[a]);
+        const newSequences = new Uint32Array(this.size * this.steps);
+        // Keep elites
+        for (let i = 0; i < eliteCount; i++) {
+            const idx = sortedIndices[i];
+            newSequences.set(this.sequences.slice(idx * this.steps, (idx + 1) * this.steps), i * this.steps);
+        }
+        // Generate offspring
+        for (let i = eliteCount; i < this.size; i++) {
+            let parentA_rank = Math.floor(Math.random() * eliteCount);
+            let parentB_rank = Math.floor(Math.random() * eliteCount);
+            if (eliteCount > 1) {
+                while (parentA_rank === parentB_rank) {
+                    parentB_rank = Math.floor(Math.random() * eliteCount);
+                }
+            }
+            const parentA_idx = sortedIndices[parentA_rank];
+            const parentB_idx = sortedIndices[parentB_rank];
+            const crossPoint = Math.floor(Math.random() * this.steps);
+            for (let s = 0; s < this.steps; s++) {
+                const val = (s < crossPoint)
+                    ? this.sequences[parentA_idx * this.steps + s]
+                    : this.sequences[parentB_idx * this.steps + s];
+                newSequences[i * this.steps + s] =
+                    (Math.random() < mutationRate)
+                        ? Math.floor(Math.random() * actionsCount)
+                        : val;
+            }
+        }
+        this.sequences = newSequences;
+    }
+}
 // COMPUTE SHADER (WGSL)  
 const computeShaderWGSL = `
 struct Params {
@@ -334,6 +396,10 @@ function getUIElements() {
         diversityCanvas: document.getElementById('diversityCanvas'),
         top5List: document.getElementById('top5List'),
         manualActionsPanel: document.getElementById('manualActionsPanel'),
+        startIslands: document.getElementById('startIslands'),
+        mergeEvery: document.getElementById('mergeEvery'),
+        // topKFromIsland: document.getElementById('topKFromIsland') as HTMLInputElement,
+        // keepTopTotal: document.getElementById('keepTopTotal') as HTMLInputElement,
     };
 }
 // MODE HANDLING  
@@ -512,7 +578,7 @@ function updateTop5Display(ui) {
     html += '</div>';
     ui.top5List.innerHTML = html;
 }
-// EVOLUTION MODE  
+// EVOLUTION MODE
 async function runEvolution(ui) {
     if (!sharedTargetPattern || sharedTargetPattern.every(cell => cell === 0)) {
         log(ui.log, 'ERROR: No target pattern set. Please draw a pattern on the target canvas first.');
@@ -523,27 +589,61 @@ async function runEvolution(ui) {
     ui.stopBtn.disabled = false;
     const device = await initWebGPU();
     await setupComputePipeline();
-    const batchSize = Number(ui.population.value);
+    const totalPopSize = Number(ui.population.value);
     const steps = Number(ui.steps.value);
     const generations = Number(ui.generations.value);
     const mutationRate = Number(ui.mut.value);
     const eliteFrac = Number(ui.elite.value);
     const vizFreq = Number(ui.vizFreq.value);
+    const startIslands = Math.max(1, Number(ui.startIslands.value));
+    const mergeEvery = Number(ui.mergeEvery.value);
+    // const topKFromIsland = Number(ui.topKFromIsland.value);
+    // const keepTopTotal = Number(ui.keepTopTotal.value);
+    // Initialize islands
+    let islands = [];
+    const basePop = Math.floor(totalPopSize / startIslands);
+    const remainder = totalPopSize % startIslands;
+    for (let i = 0; i < startIslands; i++) {
+        const islandSize = basePop + (i < remainder ? 1 : 0);
+        islands.push(new Island(islandSize, steps, ACTIONS.length));
+    }
+    log(ui.log, `Starting evolution with ${startIslands} islands, total population: ${totalPopSize}`);
     const stateSize = GRID_SIZE * GRID_SIZE;
-    const stateBufferSize = batchSize * stateSize * 4;
-    const seqBufferSize = batchSize * steps * 4;
-    const inputStatesBuffer = device.createBuffer({ size: stateBufferSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    const inputSequencesBuffer = device.createBuffer({ size: seqBufferSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    const outputStatesBuffer = device.createBuffer({ size: stateBufferSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const targetBuffer = device.createBuffer({ size: stateSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-    const fitnessBuffer = device.createBuffer({ size: batchSize * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-    const fitnessReadBuffer = device.createBuffer({ size: batchSize * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    const paramsBuffer = device.createBuffer({ size: 3 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const initialStates = new Uint32Array(batchSize * stateSize);
+    const stateBufferSize = totalPopSize * stateSize * 4;
+    const seqBufferSize = totalPopSize * steps * 4;
+    const inputStatesBuffer = device.createBuffer({
+        size: stateBufferSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    const inputSequencesBuffer = device.createBuffer({
+        size: seqBufferSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    const outputStatesBuffer = device.createBuffer({
+        size: stateBufferSize,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+    });
+    const targetBuffer = device.createBuffer({
+        size: stateSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    const fitnessBuffer = device.createBuffer({
+        size: totalPopSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+    });
+    const fitnessReadBuffer = device.createBuffer({
+        size: totalPopSize * 4,
+        usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+    });
+    const paramsBuffer = device.createBuffer({
+        size: 3 * 4,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    const initialStates = new Uint32Array(totalPopSize * stateSize);
     device.queue.writeBuffer(inputStatesBuffer, 0, initialStates);
     const targetPattern32 = new Uint32Array(sharedTargetPattern);
     device.queue.writeBuffer(targetBuffer, 0, targetPattern32);
-    const paramsArray = new Uint32Array([GRID_SIZE, batchSize, steps]);
+    const paramsArray = new Uint32Array([GRID_SIZE, totalPopSize, steps]);
     device.queue.writeBuffer(paramsBuffer, 0, paramsArray);
     const bindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
@@ -556,7 +656,6 @@ async function runEvolution(ui) {
             { binding: 5, resource: { buffer: fitnessBuffer } },
         ],
     });
-    let populationSequences = new Uint32Array(batchSize * steps).map(() => Math.floor(Math.random() * ACTIONS.length));
     bestFitness = 0;
     bestSequence = null;
     avgFitnessHistory = [];
@@ -568,72 +667,133 @@ async function runEvolution(ui) {
     const totalPossibleSequences = Math.pow(ACTIONS.length, steps);
     for (let gen = 0; gen < generations && isRunning; gen++) {
         currentGeneration = gen;
-        device.queue.writeBuffer(inputSequencesBuffer, 0, populationSequences);
+        // Collect all sequences from islands
+        const allSequences = new Uint32Array(totalPopSize * steps);
+        let offset = 0;
+        for (const island of islands) {
+            allSequences.set(island.sequences, offset);
+            offset += island.sequences.length;
+        }
+        device.queue.writeBuffer(inputSequencesBuffer, 0, allSequences);
         const commandEncoder = device.createCommandEncoder();
         const pass = commandEncoder.beginComputePass();
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(batchSize / 64));
+        pass.dispatchWorkgroups(Math.ceil(totalPopSize / 64));
         pass.end();
-        commandEncoder.copyBufferToBuffer(fitnessBuffer, 0, fitnessReadBuffer, 0, batchSize * 4);
+        commandEncoder.copyBufferToBuffer(fitnessBuffer, 0, fitnessReadBuffer, 0, totalPopSize * 4);
         device.queue.submit([commandEncoder.finish()]);
         await fitnessReadBuffer.mapAsync(GPUMapMode.READ);
         const fitnessArray = Array.from(new Uint32Array(fitnessReadBuffer.getMappedRange().slice(0)));
         fitnessReadBuffer.unmap();
-        // Convert raw match counts to percentages
-        const stateSize = GRID_SIZE * GRID_SIZE;
-        for (let i = 0; i < batchSize; i++) {
+        // Convert to percentages
+        for (let i = 0; i < totalPopSize; i++) {
             fitnessArray[i] = (fitnessArray[i] / stateSize) * 100;
         }
-        let maxFit = 0;
-        let maxIdx = -1;
+        // Update island fitness
+        offset = 0;
+        let island_idx = 0;
+        for (const island of islands) {
+            island.updateFitness(fitnessArray, offset);
+            offset += island.size;
+            // Update global best
+            if (island.bestFitness > bestFitness) {
+                if (island.bestFitness === 100 && bestFitness < 100) {
+                    countAtFirstPerfectMatch = uniqueSequencesSeen.size.toLocaleString();
+                }
+                bestFitness = island.bestFitness;
+                bestSequence = island.bestSequence ? new Uint32Array(island.bestSequence) : null;
+                log(ui.log, `Gen ${gen}: New best fitness ${bestFitness.toFixed(1)}% from island #${island_idx + 1} with ${island.size} members`);
+            }
+            island_idx++;
+        }
+        // Update statistics
         let sumFitness = 0;
-        for (let i = 0; i < batchSize; i++) {
-            sumFitness += fitnessArray[i];
-            if (fitnessArray[i] > maxFit) {
-                maxFit = fitnessArray[i];
-                maxIdx = i;
+        const seqSet = new Set();
+        offset = 0;
+        for (const island of islands) {
+            for (let i = 0; i < island.size; i++) {
+                sumFitness += island.fitness[i];
+                const seqStr = Array.from(island.sequences.slice(i * steps, (i + 1) * steps)).join(',');
+                seqSet.add(seqStr);
+                uniqueSequencesSeen.add(seqStr);
             }
         }
-        const avgFitness = sumFitness / batchSize;
-        if (maxFit > bestFitness) {
-            countAtFirstPerfectMatch = maxFit === 100 ? uniqueSequencesSeen.size.toLocaleString() : 'N/A';
-            bestFitness = maxFit;
-            bestSequence = populationSequences.slice(maxIdx * steps, (maxIdx + 1) * steps);
-            log(ui.log, `Gen ${gen}: New best fitness ${bestFitness}%`);
-        }
+        const avgFitness = sumFitness / totalPopSize;
+        diversityHistory.push(seqSet.size / totalPopSize);
+        avgFitnessHistory.push(avgFitness);
+        allTimeBestFitnessHistory.push(bestFitness);
         // Update top 5 sequences
-        const sortedIndices = Array.from({ length: batchSize }, (_, i) => i).sort((a, b) => fitnessArray[b] - fitnessArray[a]);
-        for (let i = 0; i < Math.min(5, batchSize); i++) {
-            const idx = sortedIndices[i];
-            const seq = populationSequences.slice(idx * steps, (idx + 1) * steps);
-            const fit = fitnessArray[idx];
-            const seqKey = Array.from(seq).join(',');
-            const exists = top5Sequences.find(e => Array.from(e.sequence).join(',') === seqKey);
-            if (!exists && fit > 0) {
-                top5Sequences.push({
-                    sequence: new Uint32Array(seq),
-                    fitness: fit,
-                    generation: gen
-                });
+        for (const island of islands) {
+            const topFromIsland = island.getTopSequences(5);
+            for (const { seq, fit } of topFromIsland) {
+                if (fit > 0) {
+                    const seqKey = Array.from(seq).join(',');
+                    const exists = top5Sequences.find(e => Array.from(e.sequence).join(',') === seqKey);
+                    if (!exists) {
+                        top5Sequences.push({
+                            sequence: new Uint32Array(seq),
+                            fitness: fit,
+                            generation: gen
+                        });
+                    }
+                }
             }
         }
         top5Sequences.sort((a, b) => b.fitness - a.fitness);
         top5Sequences = top5Sequences.slice(0, 5);
-        const seqSet = new Set();
-        for (let i = 0; i < batchSize; i++) {
-            const seqStr = populationSequences.slice(i * steps, (i + 1) * steps).join(',');
-            seqSet.add(seqStr);
-            uniqueSequencesSeen.add(seqStr);
+        // Merge logic
+        const shouldMerge = ((gen + 1) % mergeEvery === 0) && (islands.length > 1);
+        if (shouldMerge) {
+            // Collect top sequences from all islands
+            const candidates = [];
+            for (const island of islands) {
+                // added 
+                const topKFromIsland = eliteFrac * island.size;
+                const topK = island.getTopSequences(topKFromIsland);
+                candidates.push(...topK);
+            }
+            candidates.sort((a, b) => b.fit - a.fit);
+            // const kept = candidates.slice(0, Math.min(keepTopTotal, candidates.length));
+            // const kept = candidates;
+            // log(ui.log, `Gen ${gen + 1}: Merging ${islands.length} islands. Keeping ${kept.length} top sequences.`);
+            log(ui.log, `Gen ${gen + 1}: Merging ${islands.length} islands. Keeping ${candidates.length} top sequences.`);
+            // Create new islands (half the count)
+            const newIslandCount = Math.max(1, Math.ceil(islands.length / 2));
+            const newBasePop = Math.floor(totalPopSize / newIslandCount);
+            const newRemainder = totalPopSize % newIslandCount;
+            const newIslands = [];
+            for (let i = 0; i < newIslandCount; i++) {
+                const islandSize = newBasePop + (i < newRemainder ? 1 : 0);
+                const newIsland = new Island(islandSize, steps, ACTIONS.length);
+                // Seed with kept sequences
+                // const numToSeed = Math.min(kept.length, Math.max(1, Math.floor(islandSize / 5)));
+                const numToSeed = Math.min(candidates.length, Math.max(1, Math.floor(islandSize / 5)));
+                // for (let j = 0; j < numToSeed && j < kept.length; j++) {
+                for (let j = 0; j < numToSeed && j < candidates.length; j++) {
+                    // const pickIdx = Math.floor(Math.random() * kept.length);
+                    const pickIdx = Math.floor(Math.random() * candidates.length);
+                    // newIsland.sequences.set(kept[pickIdx].seq, j * steps);
+                    newIsland.sequences.set(candidates[pickIdx].seq, j * steps);
+                }
+                newIslands.push(newIsland);
+            }
+            islands = newIslands;
+            log(ui.log, `Now running with ${islands.length} island(s).`);
         }
-        diversityHistory.push(seqSet.size / batchSize);
-        avgFitnessHistory.push(avgFitness);
-        allTimeBestFitnessHistory.push(bestFitness);
+        else {
+            // Normal evolution within each island
+            for (const island of islands) {
+                island.evolve(mutationRate, eliteFrac, ACTIONS.length);
+            }
+        }
+        // Visualization
         if (gen % vizFreq === 0 || gen === generations - 1 || bestFitness === 100) {
             const bestSeqStr = bestSequence ? formatSequence(bestSequence, 20) : 'N/A';
             const explorationPercent = (uniqueSequencesSeen.size / totalPossibleSequences) * 100;
             ui.statsDiv.innerHTML = `
         Gen: <strong>${gen} / ${generations}</strong><br>
+        Islands: <strong>${islands.length}</strong> (sizes: ${islands.map(i => i.size).join(', ')})<br>
         Best Fitness: <strong>${bestFitness.toFixed(1)}%</strong><br>
         Avg Fitness: <strong>${avgFitness.toFixed(1)}%</strong><br>
         <hr style="margin: 4px 0; border-top: 1px solid #e2e8f0;">
@@ -646,8 +806,10 @@ async function runEvolution(ui) {
       `;
             renderGrid(ui.evolveBestCanvas, evaluateSequenceToGrid(bestSequence), '#38a169');
             renderGrid(ui.targetVizCanvas, sharedTargetPattern, '#e29d43ff');
-            const randomIdx = Math.floor(Math.random() * batchSize);
-            const randomSeq = populationSequences.slice(randomIdx * steps, (randomIdx + 1) * steps);
+            // Show random sequence from random island
+            const randomIsland = islands[Math.floor(Math.random() * islands.length)];
+            const randomIdx = Math.floor(Math.random() * randomIsland.size);
+            const randomSeq = randomIsland.sequences.slice(randomIdx * steps, (randomIdx + 1) * steps);
             renderGrid(ui.evolveCurrentCanvas, evaluateSequenceToGrid(randomSeq), '#4299e1');
             renderFitnessChart(ui.fitnessDistCanvas, avgFitnessHistory, allTimeBestFitnessHistory);
             renderDiversityChart(ui.diversityCanvas, diversityHistory);
@@ -655,46 +817,13 @@ async function runEvolution(ui) {
             await new Promise(r => setTimeout(r, 1));
         }
         if (bestFitness === 100) {
-            log(ui.log, `Perfect match found in generation ${gen}!`);
-            // break; // instead of stopping the search, let's keep evolving other solutions; we do note the time (unique sequence count) to first solution in the stats window
+            log(ui.log, `Perfect match found in generation ${gen}! Continuing to explore other solutions...`);
         }
-        const newPopulation = new Uint32Array(batchSize * steps);
-        const eliteCount = Math.floor(batchSize * eliteFrac);
-        for (let i = 0; i < eliteCount; i++) {
-            const bestIdx = sortedIndices[i];
-            newPopulation.set(populationSequences.slice(bestIdx * steps, (bestIdx + 1) * steps), i * steps);
-        }
-        for (let i = eliteCount; i < batchSize; i++) {
-            // Select two random parents from the elite-only pool
-            // (indices 0 to eliteCount-1 in sortedIndices)
-            let parentA_rank = Math.floor(Math.random() * eliteCount);
-            let parentB_rank = Math.floor(Math.random() * eliteCount);
-            // Ensure distinct parents, matching np.random.choice(..., replace=False)
-            if (eliteCount > 1) {
-                while (parentA_rank === parentB_rank) {
-                    parentB_rank = Math.floor(Math.random() * eliteCount);
-                }
-            }
-            const parentA_idx = sortedIndices[parentA_rank];
-            const parentB_idx = sortedIndices[parentB_rank];
-            const parentA = populationSequences.slice(parentA_idx * steps, (parentA_idx + 1) * steps);
-            const parentB = populationSequences.slice(parentB_idx * steps, (parentB_idx + 1) * steps);
-            const crossPoint = Math.floor(Math.random() * steps);
-            const child = new Uint32Array(steps);
-            for (let s = 0; s < steps; s++) {
-                child[s] = (s < crossPoint) ? parentA[s] : parentB[s];
-                if (Math.random() < mutationRate) {
-                    child[s] = Math.floor(Math.random() * ACTIONS.length);
-                }
-            }
-            newPopulation.set(child, i * steps);
-        }
-        populationSequences = newPopulation;
     }
     isRunning = false;
     ui.startBtn.disabled = false;
     ui.stopBtn.disabled = true;
-    log(ui.log, 'Evolution complete.');
+    log(ui.log, `Evolution complete. Final island count: ${islands.length}`);
 }
 // CHART RENDERING  
 function renderChart(canvas, datasets, yLabel, xLabel, yMax) {
