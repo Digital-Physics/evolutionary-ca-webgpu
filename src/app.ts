@@ -931,7 +931,7 @@ async function runEvolution(ui: UIElements) {
       const explorationPercent = (uniqueSequencesSeen.size / totalPossibleSequences) * 100;
 
       ui.statsDiv.innerHTML = `
-        Gen: <strong>${gen} / ${generations}</strong><br>
+        Gen: <strong>${gen + 1} / ${generations}</strong><br>
         Islands: <strong>${islands.length}</strong> (sizes: ${islands.map(i => i.size).join(', ')})<br>
         Best Fitness: <strong>${bestFitness.toFixed(1)}%</strong><br>
         Avg Fitness: <strong>${avgFitness.toFixed(1)}%</strong><br>
@@ -970,96 +970,6 @@ async function runEvolution(ui: UIElements) {
   ui.stopBtn.disabled = true;
   log(ui.log, `Evolution complete. Final island count: ${islands.length}`);
 }
-
-// CHART RENDERING  
-// function renderChart(canvas: HTMLCanvasElement, datasets: {data: number[], color: string, label: string}[], yLabel: string, xLabel: string, yMaxFixed?: number) {
-//     const ctx = canvas.getContext('2d');
-//     if (!ctx || datasets.length === 0 || datasets[0].data.length === 0) return;
-    
-//     // Resizing canvas drawing buffer to match display size to prevent stretching  
-//     const rect = canvas.getBoundingClientRect();
-//     if (canvas.width !== rect.width || canvas.height !== rect.height) {
-//         canvas.width = rect.width;
-//         canvas.height = rect.height;
-//     }
-
-//     const { width, height } = canvas;
-//     const p = { t: 30, r: 20, b: 40, l: 50 };
-
-//     const xRange = width - p.l - p.r;
-//     const yRange = height - p.t - p.b;
-//     const numPoints = datasets[0].data.length;
-
-//     ctx.clearRect(0, 0, width, height);
-//     ctx.font = '12px sans-serif';
-
-//     // dynamic Y-axis range calculation
-//     const allValues = datasets.flatMap(d => d.data);
-//     let yMin = Math.min(...allValues);
-//     let yMax = Math.max(...allValues);
-
-//     // Add small padding and handle case where values are identical
-//     if (yMax === yMin) {
-//         yMin -= 1;
-//         yMax += 1;
-//     } else {
-//         const pad = (yMax - yMin) * 0.05;
-//         yMin -= pad;
-//         yMax += pad;
-//     }
-
-//     // Override if yMaxFixed is provided
-//     if (yMaxFixed !== undefined) yMax = yMaxFixed;
-//     // (You could also clamp yMin = 0 if you *always* want positive values.)
-
-//     // draw horizontal lines
-//     ctx.strokeStyle = '#e2e8f0';
-//     ctx.fillStyle = '#718096';
-//     ctx.lineWidth = 1;
-//     ctx.textAlign = 'right';
-//     ctx.textBaseline = 'middle';
-//     const numTicks = 5;
-//     for (let i = 0; i <= 5; i++) {
-//         const frac = i / numTicks;
-//         const y = p.t + yRange * (1 - frac);
-//         const val = yMin + (yMax - yMin) * frac;
-//         ctx.beginPath();
-//         ctx.moveTo(p.l, y);
-//         ctx.lineTo(p.l + xRange, y);
-//         ctx.stroke();
-//         // ctx.fillText((yMax * i / 5).toFixed(yMax < 2 ? 1 : 0), p.l - 8, y);
-//         ctx.fillText(val.toFixed(yMax - yMin < 2 ? 2 : 0), p.l - 8, y);
-//     }
-
-//     // draw data lines
-//     datasets.forEach(({ data, color }) => {
-//         ctx.strokeStyle = color;
-//         ctx.lineWidth = 2;
-//         ctx.beginPath();
-//         for (let i = 0; i < numPoints; i++) {
-//             const x = p.l + (xRange * i) / Math.max(1, numPoints - 1);
-//             // const y = p.t + yRange * (1 - data[i] / yMax);
-//             const norm = (data[i] - yMin) / (yMax - yMin);
-//             const y = p.t + yRange * (1 - norm);
-//             if (i === 0) ctx.moveTo(x, y);
-//             else ctx.lineTo(x, y);
-//         }
-//         ctx.stroke();
-//     });
-
-//     // axis labels
-//     ctx.fillStyle = '#2d3748';
-//     ctx.textAlign = 'center';
-//     ctx.textBaseline = 'bottom';
-//     ctx.fillText(xLabel, p.l + xRange / 2, height - 5);
-    
-//     ctx.save();
-//     ctx.translate(15, p.t + yRange / 2);
-//     ctx.rotate(-Math.PI / 2);
-//     ctx.textBaseline = 'top';
-//     ctx.fillText(yLabel, 0, 0);
-//     ctx.restore();
-// }
 
 // CHART RENDERING  
 function renderChart(
@@ -1128,17 +1038,32 @@ function renderChart(
     });
 
     // draw legend (top-right)
-    const legendX = width - p.r - 110;
+    const legendX = width - p.r - 120;
     let legendY = p.t - 10;
+
+    // compute legend box dimensions
+    const legendWidth = 110;
+    const legendHeight = datasets.length * 15 + 10;
+
+    // draw subtle translucent background + soft border
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';  // soft white background
+    ctx.fillRect(legendX, legendY, legendWidth, legendHeight);
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';     // faint border
+    ctx.lineWidth = 1;
+    ctx.strokeRect(legendX + 0.5, legendY + 0.5, legendWidth - 1, legendHeight - 1);
+
+    // draw each legend entry
+    let entryY = legendY + 6;
     datasets.forEach(({ color, label }) => {
         ctx.fillStyle = color;
-        ctx.fillRect(legendX, legendY, 10, 10);
+        ctx.fillRect(legendX + 8, entryY, 10, 10);
         ctx.fillStyle = '#2d3748';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
-        ctx.fillText(label, legendX + 15, legendY - 1);
-        legendY += 15;
+        ctx.fillText(label, legendX + 24, entryY - 1);
+        entryY += 15;
     });
+
 
     // axis labels
     ctx.fillStyle = '#2d3748';
@@ -1165,8 +1090,8 @@ function renderFitnessChart(canvas: HTMLCanvasElement, avg: number[], best: numb
 
 function renderDiversityChart(canvas: HTMLCanvasElement, diversity: number[]) {
     renderChart(canvas, [
-        { data: diversity, color: '#9f7aea', label: 'Diversity' }
-    ], 'Unique Action Seq. %', 'Generation');
+        { data: diversity, color: '#9f7aea', label: 'Diversity %' }
+    ], 'Unique Action Sequence %', 'Generation');
 }
 
 // DEMO MODE  (should we add this to stats in Evolve mode too?)
