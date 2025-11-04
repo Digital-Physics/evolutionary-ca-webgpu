@@ -513,7 +513,6 @@ function updateManualDisplay() {
   
   let statsHTML = `
     Step: <strong>${manualStep}/${maxSteps}</strong><br>
-    Write Pattern Window: <strong>(${manualAgentX}, ${manualAgentY})</strong><br>
     Temporary Pattern Match: <strong>${matchPercent.toFixed(1)}%</strong>
   `;
 

@@ -105,6 +105,7 @@
       aspect-ratio: 1 / 1;
       cursor: pointer;
       max-width: 240px;
+      flex-shrink: 0;
     }
     
     .pattern-label {
@@ -195,16 +196,24 @@
         height: 100%;
     }
 
-    .canvas-grid {
+    /* .canvas-grid {
         display: flex;
         gap: 1rem;
         justify-content: center;
+        flex-wrap: wrap;
+    } */
+
+    .canvas-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem;
     }
     .canvas-grid > div {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 0.5rem;
+        /* min-width: 240px; */
     }
 
     #demoActionsCanvas {
@@ -298,7 +307,7 @@
 
                <div class="card">
                   <div class="pattern-label">Best Action Sequences</div>
-                  <div id="top5List" style="max-height: 200px;">
+                  <div id="top5List" style="max-height: 200px; min-width: 220px;">
               </div>
           </div>
            </div>
@@ -380,7 +389,7 @@
                     </div>
                 </div>
                 <div class="card">
-                    <div class="pattern-label">Instructions - Game of Life Pattern Matching Game</div>
+                    <div class="pattern-label">Game Instructions - Pattern Matching in Conway's "Game of Life"</div>
                     <div class="stats-box">
                         • <strong>Goal:</strong> Match Target Pattern at step <span id="manualMaxStepsLabel">12</span><br>
                         • <strong>Actions (Keyboard Shortcuts):</strong>
@@ -389,7 +398,7 @@
                                 <li><strong>Space Bar:</strong> PASS</li>
                                 <li><strong>Hex Keys(0-9 & A-F):</strong> WRITE a 2×2 pattern</li>
                             </ul>
-                        • <strong>Update Rule:</strong> An action (move/pass/write) is always preceded by a GoL update step.<br>
+                        • <strong>Update Rule:</strong> An action (i.e. move, pass, or write) is always preceded by a "Game of Life" update step.<br>
                         • <strong>Reset Game:</strong> Use the Reset Game button to play again. <br>
                         • <strong>Save Game State as Target Pattern:</strong> Save the current Game of Life state as the new target pattern for Manual Play or Evolution Mode.
                     </div>
