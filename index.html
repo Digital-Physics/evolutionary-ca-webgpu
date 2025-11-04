@@ -195,13 +195,11 @@
         width: 100%;
         height: 100%;
     }
-
-    /* .canvas-grid {
-        display: flex;
-        gap: 1rem;
-        justify-content: center;
-        flex-wrap: wrap;
-    } */
+    .charts-wrapper {
+      display: flex;
+      gap: 1rem;
+      flex-grow: 1;
+    }
 
     .canvas-grid {
         display: grid;
@@ -274,6 +272,7 @@
       .right-panel { min-width: unset; }
       .canvas-grid { flex-direction: column; }
       .pattern-canvas { max-width: 100%; }
+      .charts-wrapper { flex-direction: column; }
     }
   </style>
 </head>
@@ -311,7 +310,7 @@
               </div>
           </div>
            </div>
-           <div class="card" style="display: flex; gap: 1rem; flex-grow: 1;">
+           <div class="card charts-wrapper">
               <div class="chart-container">
                 <div class="pattern-label">Fitness Progress</div>
                 <canvas id="fitnessDistCanvas" class="chart-canvas"></canvas>
