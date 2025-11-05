@@ -35,6 +35,16 @@ Fuzzy memory is okay; it doesn't need to be perfect; it's just initializing the 
 
 (e.g. (1/3) * state_t-2 + (1/3) * state_t-1 + (1/3) * state_t) ? 🤔
 
-Look at trade-offs between memory approaches (e.g. save every state at every step vs. save every 5th state vs. save end state only), recall speed (i.e. hash key, nearest neighbor, approximate nearest neighbor retrieval), recall metric (TP/(TP + FN) where TP = mutations on surfaced sequences that lead to the solution, and FN = sampled sequences already seen that were not surfaced with ANN or NN, and which lead to the solution. Newly generated sequences to mix in with retrieved nearest match sequences that eventually lead to a solution would be neither TP, FN (or FP, TN because it was a successful solution)), and the overall helpfulness for finding solutions to new patterns quicker, etc.
+Look at time-space trade-offs.
 
-New Metric needed: "Total Unique Action Sequences of Length X Seen Across All Evolutions" 
+Memory approaches (e.g. save every state at every step vs. save every 5th state vs. save end state only)
+
+recall speed (i.e. hash key, nearest neighbor, approximate nearest neighbor retrieval), 
+
+the recall evaluation metric (TP/(TP + FN) where TP = mutations on surfaced sequences that lead to the solution, and FN = sampled sequences already seen that were not retrieved with ANN or NN, but which lead to the solution. Newly generated sequences that lead to a solution (again, after some mutations to the action sequence over generations) would not be either a TP or a FN (or FP, TN (because it lead to a successful solution)) To do this, we'd need to tag each sequence at the start (e.g. new, retrieved, resampled_but_not_retrieved) and carry it though each generation.),  
+
+the number of additional evolution generations until an exact solution is reached,   
+
+and the overall helpfulness of "memory" (of past action sequences and patterns) to assist in finding solutions to new patterns more quickly.  
+
+New bar chart needed in UI: "Total Unique Action Sequences Seen Across All Evolutions" with the x axis being "Action sequence end length"
