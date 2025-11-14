@@ -1424,6 +1424,7 @@ function initApp() {
   handleModeChange(); // This will render the initial pattern
   log(ui.log, "App ready. Default target pattern loaded. Press 'Start Evolution' or go to Manual mode.");
   log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader. Make sure your browser is WebGPU-compatible and enabled.');
+  log(ui.log, 'RL Gymnasium for training your own Reinforcement Agent 🤖🏋🏻: https://github.com/Digital-Physics/game-of-life-pattern-RL-gym');
 }
 
 window.addEventListener('DOMContentLoaded', initApp);
