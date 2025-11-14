@@ -518,10 +518,16 @@ function handleManualKeyDown(e) {
     }
 }
 // LOGGING  
+// function log(el: HTMLElement | null, ...args: any[]) {
+//   if (!el) return;
+//   el.textContent += args.join(' ') + '\n';
+//   el.scrollTop = el.scrollHeight;
+// }
+// Modified (Allows HTML/Links)
 function log(el, ...args) {
     if (!el)
         return;
-    el.textContent += args.join(' ') + '\n';
+    el.innerHTML += args.join(' ') + '<br>'; // <-- Use innerHTML and <br> for line breaks
     el.scrollTop = el.scrollHeight;
 }
 // WEBGPU SETUP  
@@ -1222,6 +1228,6 @@ function initApp() {
     handleModeChange(); // This will render the initial pattern
     log(ui.log, "App ready. Default target pattern loaded. Press 'Start Evolution' or go to Manual mode.");
     log(ui.log, 'Simulation Note: Action Sequence Fitness evaluation computed with a WebGPU shader. Make sure your browser is WebGPU-compatible and enabled.');
-    log(ui.log, 'Train your own Reinforcement Learning Agent in the RL Gymnasium 🤖🏋🏻: <a href="https://github.com/Digital-Physics/game-of-life-pattern-RL-gym">View Repository</a>');
+    log(ui.log, 'Train your own Reinforcement Learning Agent in the RL Gymnasium 🤖🏋🏻: <a href="https://github.com/Digital-Physics/game-of-life-pattern-RL-gym">https://github.com/Digital-Physics/game-of-life-pattern-RL-gym</a>');
 }
 window.addEventListener('DOMContentLoaded', initApp);
