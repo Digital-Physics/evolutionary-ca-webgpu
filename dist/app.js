@@ -55,6 +55,26 @@ let allTimeBestFitnessHistory = [];
 let diversityHistory = [];
 let uniqueSequencesSeen = new Set();
 let countAtFirstPerfectMatch = "N/A";
+async function addInfoToBackend() {
+    const use_localhost = false;
+    const backend_address = use_localhost ? 'http://127.0.0.1:8001/visits' : 'https://gpteopardy-backend-service.onrender.com/visits';
+    const response = await fetch(backend_address, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            site_id: 'evolutionary-GoL',
+        })
+    });
+    if (response.ok) {
+        const result = await response.json();
+        return result;
+    }
+    else {
+        console.error('Failed to track site visit:', response.statusText);
+    }
+}
 class Island {
     constructor(size, steps, actionsCount) {
         this.size = size;
@@ -1164,6 +1184,7 @@ function initializeDemoMode() {
     resetDemo(ui);
 }
 function initApp() {
+    addInfoToBackend();
     if (sharedTargetPattern) {
         const patternIndices = [
             (4 * GRID_SIZE + 4), (4 * GRID_SIZE + 5), // Top 2x2
